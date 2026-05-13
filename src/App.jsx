@@ -37,6 +37,8 @@ function getRoleCommitments(player) {
       counts[r] += 1;
     }
   }
+  // Theater runs occupy the actor — eight shows a week, no time for a film set.
+  if (player.activeTheaterRun) counts.actor += 1;
   return counts;
 }
 
@@ -252,6 +254,9 @@ function unpackSave(raw) {
     coProducingOffers: p.coProducingOffers || [], // pending producer-on-hire offers
     coProductions: p.coProductions || [], // films you have capital invested in, awaiting release
     coProductionsHistory: p.coProductionsHistory || [], // settled co-productions — for history
+    activeTheaterRun: p.activeTheaterRun || null, // live theater engagement, locks actor slot
+    theaterHistory: p.theaterHistory || [], // closed theater runs — for record + legacy
+    commercialHistory: p.commercialHistory || [], // shot commercials — for record
     // Unified production list. Each entry is a full production state (proj, mods,
     // phase, per-phase event queues, etc.) plus a status flag:
     //   - 'inProgress': the currently-viewed/foreground production
@@ -525,6 +530,9 @@ function initialPlayer(name, startingRole, inheritedWorld = null) {
     coProductions: [],       // accepted, in-production
     coProductionsHistory: [], // settled (released)
     activeProductions: [],   // unified slate: all films the player is currently making (foreground + background)
+    activeTheaterRun: null,  // when set: { title, tier, venue, weeks, weeksDone, weeklyPay, weeklyFame, weeklySkill, completionRep, raveChance, nomChance, startedYear, startedWeek }
+    theaterHistory: [],      // closed runs — [{ title, tier, venue, year, weeks, totalPay, raves, nomination }]
+    commercialHistory: [],   // shot commercials — [{ tier, brand, year, pay }] for the record
   };
 }
 
@@ -943,6 +951,154 @@ function generateAudition(player, roleType) {
     prestige: isPrestige,
     // Pay is lower for open-call auditions, but prestige roles still pay well
     pay: isPrestige ? base.pay : Math.round(base.pay * (heat < 30 ? 0.4 : 0.8)),
+  };
+}
+
+// ---------- COMMERCIAL GIGS ----------
+//
+// Quick paydays. The actor shoots a spot, takes the check, moves on. Unknowns
+// take regional ads to cover rent; stars do national campaigns and celebrity
+// endorsements. Above fame ~80 there's a "sellout" risk: doing commercials
+// when your name carries weight can ding your acting reputation a hair.
+//
+// Pay is stored in 1985-base dollars (displayed period-relative everywhere).
+
+const COMMERCIAL_BRANDS_LOCAL = [
+  'a regional auto dealership', 'a state-fair grocery chain', 'a discount furniture warehouse',
+  'a chain of dry cleaners', 'a local appliance store', 'a family steakhouse',
+  'a regional cable provider', 'a roadside motel chain',
+];
+const COMMERCIAL_BRANDS_NATIONAL = [
+  'a national soft-drink campaign', 'a denim brand\'s holiday push',
+  'a cigarette billboard spread', 'a network car rental account',
+  'a department store back-to-school spot', 'a coffee brand\'s breakfast campaign',
+  'a fast-food chain\'s tentpole ad', 'a network airline\'s reach push',
+  'a long-distance telephone spot', 'a household appliance brand\'s flagship ad',
+];
+const COMMERCIAL_BRANDS_CELEBRITY = [
+  'a luxury watch endorsement', 'a perfume bottle on the cover of Vogue',
+  'a Japanese whisky imported only for the spot', 'a designer label\'s European campaign',
+  'a sports car company\'s flagship commercial', 'a credit card commercial that runs the Super Bowl',
+];
+
+function generateCommercial(player) {
+  // Tier by fame. 1985-base pay; displayed dollars scale by the player's current year.
+  const fame = player.fame || 0;
+  let tier, brand, basePay, fameGain;
+  if (fame >= 60) {
+    tier = 'celebrity';
+    brand = pick(COMMERCIAL_BRANDS_CELEBRITY);
+    basePay = randInt(120_000, 500_000);
+    fameGain = 1;
+  } else if (fame >= 25) {
+    tier = 'national';
+    brand = pick(COMMERCIAL_BRANDS_NATIONAL);
+    basePay = randInt(20_000, 80_000);
+    fameGain = 2;
+  } else {
+    tier = 'regional';
+    brand = pick(COMMERCIAL_BRANDS_LOCAL);
+    basePay = randInt(3_000, 12_000);
+    fameGain = 1;
+  }
+  // Selling-out risk: at high fame, commercials can ding your acting rep
+  const sellOutRisk = fame >= 80 ? 1 : 0;
+  return {
+    kind: 'commercial',
+    id: `comm-${Math.random().toString(36).slice(2, 9)}`,
+    tier,
+    brand,
+    title: `Shoot ${brand}`,
+    playerRole: 'actor',
+    pay: basePay,
+    fameGain,
+    weeks: 1,
+    sellOutRisk,
+  };
+}
+
+// ---------- THEATER ENGAGEMENTS ----------
+//
+// Multi-week runs. The actor auditions, and if booked, the engagement locks
+// them out of films for the duration of the run. Each week ticks weekly pay,
+// small skill growth, a fame trickle, and energy drain. At the end of the run
+// the actor rolls for rave reviews and a Drama Critics Circle nomination.
+//
+// Theater also counts against the actor role cap while in flight (handled in
+// getRoleCommitments).
+
+const THEATER_TITLE_NOUNS = [
+  'Wind', 'Glass', 'Train', 'Houses', 'Summer', 'Light', 'Brooklyn', 'Reckoning',
+  'Sisters', 'Cardinal', 'Boy', 'Yellow', 'Sea', 'Roses', 'Letters', 'Hill',
+  'Father', 'Window', 'Promise', 'Stone', 'Apartment', 'Holiday',
+];
+const THEATER_TITLE_ADJ = [
+  'Last', 'Long', 'Sweet', 'Small', 'Distant', 'Quiet', 'Late', 'Wild',
+  'Hollow', 'Bright', 'Slow', 'Stolen', 'Forgotten',
+];
+function generateTheaterTitle() {
+  const patterns = [
+    () => `The ${pick(THEATER_TITLE_ADJ)} ${pick(THEATER_TITLE_NOUNS)}`,
+    () => `${pick(THEATER_TITLE_NOUNS)} on the ${pick(['Hill', 'Roof', 'Avenue', 'Street'])}`,
+    () => `A ${pick(THEATER_TITLE_ADJ)} ${pick(THEATER_TITLE_NOUNS)}`,
+    () => `${pick(THEATER_TITLE_NOUNS)} in ${pick(['Autumn', 'Winter', 'Brooklyn', 'July', 'Connecticut'])}`,
+    () => `${pick(THEATER_TITLE_ADJ)} ${pick(THEATER_TITLE_NOUNS)}`,
+  ];
+  return pick(patterns)();
+}
+
+function generateTheaterAudition(player) {
+  const heat = playerHeat(player, 'actor');
+  // Tier: heat selects the venue. Each tier scales pay, length, skill yield, and prestige.
+  let tier, threshold, weeks, weeklyPay, weeklyFame, weeklySkill, completionRep, raveChance, nomChance;
+  if (heat >= 80) {
+    tier = 'broadway';
+    threshold = randInt(60, 95);
+    weeks = randInt(8, 12);
+    weeklyPay = randInt(4_000, 9_000);
+    weeklyFame = 0.4;
+    weeklySkill = 0.4;
+    completionRep = 3;
+    raveChance = 0.45;
+    nomChance = 0.25;
+  } else if (heat >= 40) {
+    tier = 'off-broadway';
+    threshold = randInt(30, 70);
+    weeks = randInt(6, 10);
+    weeklyPay = randInt(1_500, 4_000);
+    weeklyFame = 0.25;
+    weeklySkill = 0.3;
+    completionRep = 2;
+    raveChance = 0.35;
+    nomChance = 0.10;
+  } else {
+    tier = 'regional';
+    threshold = randInt(10, 45);
+    weeks = randInt(4, 8);
+    weeklyPay = randInt(400, 1_500);
+    weeklyFame = 0.12;
+    weeklySkill = 0.25;
+    completionRep = 1;
+    raveChance = 0.25;
+    nomChance = 0.03;
+  }
+  const competitors = randInt(8, 40);
+  return {
+    kind: 'theater',
+    id: `thtr-${Math.random().toString(36).slice(2, 9)}`,
+    tier,
+    title: generateTheaterTitle(),
+    venue: tier === 'broadway' ? 'a Broadway house' : tier === 'off-broadway' ? 'an off-Broadway theater' : 'a regional repertory company',
+    playerRole: 'actor',
+    threshold,
+    competitors,
+    weeks,
+    weeklyPay,
+    weeklyFame,
+    weeklySkill,
+    completionRep,
+    raveChance,
+    nomChance,
   };
 }
 
@@ -11950,6 +12106,23 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       list.push(project);
     }
 
+    // Commercials + theater — actor-only side stages. Available to anyone with
+    // any acting craft (skill ≥ 5, which is everyone from day one). Hidden
+    // while the player is already mid-run on a stage engagement, because the
+    // contract locks them out of film and TV work in the meantime.
+    const canActSide = (player.skills.actor || 0) >= 5 && !player.activeTheaterRun;
+    if (canActSide) {
+      // Commercials: 1–2 listings, scales mildly with fame so stars see more of them
+      const commercialCount = player.fame >= 40 ? 2 : 1;
+      for (let i = 0; i < commercialCount; i++) {
+        list.push(generateCommercial(player));
+      }
+      // Theater: usually 1 listing. Skip occasionally so the board doesn't always have one.
+      if (Math.random() < 0.7) {
+        list.push(generateTheaterAudition(player));
+      }
+    }
+
     setListings(list);
   };
 
@@ -11973,6 +12146,27 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       }));
     }
 
+    // Pre-compute theater run closure (if any) so we can emit a log message
+    // after setPlayer commits. Random rolls happen here, exactly once.
+    let theaterClosureLog = null;
+    if (player.activeTheaterRun) {
+      const run = player.activeTheaterRun;
+      const weeksLeft = run.weeks - run.weeksDone;
+      if (weeks >= weeksLeft) {
+        const raves = Math.random() < run.raveChance;
+        const nomination = raves && Math.random() < run.nomChance;
+        const venueWord = run.tier === 'broadway' ? 'Broadway' : run.tier === 'off-broadway' ? 'Off-Broadway' : 'the regional run';
+        theaterClosureLog = {
+          raves,
+          nomination,
+          message: nomination
+            ? `🎭 "${run.title}" closed at ${venueWord} — and you've been nominated for a Drama Critics Circle Award.`
+            : raves
+              ? `🎭 "${run.title}" closed at ${venueWord} to rave reviews.`
+              : `🎭 "${run.title}" closed at ${venueWord}. Solid notices, on to the next thing.`,
+        };
+      }
+    }
     setPlayer(p => {
       const buffs = ownedBuffs(p);
       const pBuffs = personalBuffs(p);
@@ -12081,24 +12275,90 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         }
       }
 
+      // ---- Theater run tick ----
+      // If the player is currently on stage, advance the run. Weekly stipend hits
+      // cash, fame trickles, actor skill creeps up, energy drains a little. If
+      // the run completes this tick (theaterClosureLog is set by the outer
+      // pre-compute), settle: push to theaterHistory, apply rave/nomination
+      // bonuses, clear the slot.
+      let activeTheaterRun = p.activeTheaterRun;
+      let theaterHistory = p.theaterHistory || [];
+      let theaterFameBump = 0;
+      let theaterSkillBump = 0;
+      let theaterCashAdd = 0;
+      let theaterEnergyDrain = 0;
+      let theaterReputationDelta = 0;
+      if (activeTheaterRun) {
+        const weeksLeft = activeTheaterRun.weeks - activeTheaterRun.weeksDone;
+        const weeksToRun = Math.min(weeks, weeksLeft);
+        theaterCashAdd = activeTheaterRun.weeklyPay * weeksToRun;
+        theaterFameBump = activeTheaterRun.weeklyFame * weeksToRun;
+        theaterSkillBump = activeTheaterRun.weeklySkill * weeksToRun;
+        theaterEnergyDrain = 4 * weeksToRun; // eight shows a week is tiring
+        const newWeeksDone = activeTheaterRun.weeksDone + weeksToRun;
+        if (newWeeksDone >= activeTheaterRun.weeks) {
+          // Run closes this tick. Use the pre-rolled raves/nomination so the
+          // outcome matches the log emitted after setPlayer commits.
+          const raves = !!theaterClosureLog?.raves;
+          const nomination = !!theaterClosureLog?.nomination;
+          theaterReputationDelta = activeTheaterRun.completionRep + (raves ? 2 : 0) + (nomination ? 3 : 0);
+          theaterFameBump += raves ? 2 : 0;
+          theaterFameBump += nomination ? 4 : 0;
+          const totalPay = activeTheaterRun.weeklyPay * activeTheaterRun.weeks;
+          theaterHistory = [
+            ...theaterHistory,
+            {
+              title: activeTheaterRun.title,
+              tier: activeTheaterRun.tier,
+              venue: activeTheaterRun.venue,
+              year: newYear,
+              weeks: activeTheaterRun.weeks,
+              totalPay,
+              raves,
+              nomination,
+            },
+          ];
+          activeTheaterRun = null;
+        } else {
+          activeTheaterRun = { ...activeTheaterRun, weeksDone: newWeeksDone };
+        }
+      }
+      const finalCash = newCash + theaterCashAdd;
+      const finalFame = clamp(newFame + theaterFameBump, fameFloor, 100);
+      const finalEnergy = clamp(newEnergy - theaterEnergyDrain, 0, 100);
+      const finalSkills = { ...newSkills, actor: clamp((newSkills.actor || 0) + theaterSkillBump, 1, 100) };
+      const finalReputation = theaterReputationDelta
+        ? { ...p.reputation, actor: clamp((p.reputation.actor || 0) + theaterReputationDelta, -50, 100) }
+        : p.reputation;
+
       return {
         ...p,
         week: newWeek,
         year: newYear,
         age: newAge,
-        cash: newCash,
-        fame: newFame,
-        peakFame: Math.max(p.peakFame || 0, newFame),
-        energy: newEnergy,
-        skills: newSkills,
+        cash: finalCash,
+        fame: finalFame,
+        peakFame: Math.max(p.peakFame || 0, finalFame),
+        energy: finalEnergy,
+        skills: finalSkills,
+        reputation: finalReputation,
         personal,
         scandals: remainingScandals,
         worldNPCs: newWorldNPCs,
         lastNPCTickYear: newLastNPCTickYear,
         burnoutWeeks,
         studio: newStudio,
+        activeTheaterRun,
+        theaterHistory,
+        lifetimeEarnings: (p.lifetimeEarnings || 0) + theaterCashAdd,
       };
     });
+
+    // Emit the theater closure log after setPlayer (addLog uses setPlayer too,
+    // so calling it inside the callback above would not work reliably).
+    if (theaterClosureLog) {
+      addLog('Theater', theaterClosureLog.message);
+    }
 
     // If player became newly burnt out this tick, log it
     if (!wasBurntOut && (player.burnoutWeeks || 0) < 2 && player.energy < 20) {
@@ -12951,6 +13211,83 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
   const acceptOffer = (offer) => {
     setActiveOffer(offer);
     setView('newproj');
+  };
+
+  // Shoot a commercial — 1-week direct gig. No audition, no production view.
+  // Pay lands in the bank, fame ticks, and at very high fame the actor's rep
+  // can take a small "selling out" hit.
+  const acceptCommercial = (commercial) => {
+    setPlayer(p => {
+      const sellOutHit = commercial.sellOutRisk && Math.random() < 0.4 ? -1 : 0;
+      const newActorRep = clamp((p.reputation.actor || 0) + sellOutHit, -50, 100);
+      const tierLabel = commercial.tier === 'celebrity' ? 'celebrity endorsement'
+        : commercial.tier === 'national' ? 'national spot' : 'regional spot';
+      return {
+        ...p,
+        cash: p.cash + commercial.pay,
+        lifetimeEarnings: (p.lifetimeEarnings || 0) + commercial.pay,
+        fame: clamp(p.fame + commercial.fameGain, 0, 100),
+        peakFame: Math.max(p.peakFame || 0, clamp(p.fame + commercial.fameGain, 0, 100)),
+        reputation: { ...p.reputation, actor: newActorRep },
+        energy: clamp(p.energy - 12, 0, 100),
+        commercialHistory: [
+          ...(p.commercialHistory || []),
+          { tier: commercial.tier, brand: commercial.brand, year: p.year, pay: commercial.pay, tierLabel },
+        ].slice(-30), // keep last 30 to avoid unbounded growth
+      };
+    });
+    addLog('Commercial', `Shot ${commercial.brand}. ${fmtMoneyYear(commercial.pay, player.year)} for the day.${commercial.sellOutRisk ? ' Critics may take notice.' : ''}`);
+    setListings(prev => prev.filter(l => l !== commercial));
+    advanceWeek(commercial.weeks || 1);
+  };
+
+  // Audition for a theater engagement. Same audition roll as a film audition,
+  // but a successful booking installs an activeTheaterRun rather than queueing
+  // a production. The run then ticks weekly inside advanceWeek().
+  const attemptTheaterAudition = (audition) => {
+    const fee = 50;
+    setPlayer(p => ({
+      ...p,
+      cash: Math.max(0, p.cash - fee),
+      energy: clamp(p.energy - 10, 0, 100),
+    }));
+    advanceWeek(1);
+
+    const outcome = runAudition(player, audition);
+    setAuditionResult({ audition, outcome });
+
+    if (outcome.result === 'booked') {
+      setPlayer(p => ({
+        ...p,
+        activeTheaterRun: {
+          title: audition.title,
+          tier: audition.tier,
+          venue: audition.venue,
+          weeks: audition.weeks,
+          weeksDone: 0,
+          weeklyPay: audition.weeklyPay,
+          weeklyFame: audition.weeklyFame,
+          weeklySkill: audition.weeklySkill,
+          completionRep: audition.completionRep,
+          raveChance: audition.raveChance,
+          nomChance: audition.nomChance,
+          startedYear: p.year,
+          startedWeek: p.week,
+        },
+      }));
+      addLog('Theater', `Booked "${audition.title}" at ${audition.venue}. Rehearsals start now — ${audition.weeks} weeks on the boards.`);
+      setListings(prev => prev.filter(l => l !== audition));
+    } else if (outcome.result === 'callback') {
+      addLog('Theater', `Callback for "${audition.title}" but the part went to someone else.`);
+      setPlayer(p => ({
+        ...p,
+        skills: { ...p.skills, actor: clamp(p.skills.actor + 1, 1, 100) },
+      }));
+      setListings(prev => prev.filter(l => l !== audition));
+    } else {
+      addLog('Theater', `Didn't book "${audition.title}". The director went another way.`);
+      setListings(prev => prev.filter(l => l !== audition));
+    }
   };
 
   // Audition for a role — costs a week + small fee, may book the role
@@ -14591,6 +14928,41 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
             </CollapsiblePanel>
           )}
 
+          {/* Active theater run — shows progress through the booked engagement */}
+          {player.activeTheaterRun && (() => {
+            const run = player.activeTheaterRun;
+            const pct = Math.round((run.weeksDone / run.weeks) * 100);
+            const weeksLeft = run.weeks - run.weeksDone;
+            const tierLabel = run.tier === 'broadway' ? 'Broadway' : run.tier === 'off-broadway' ? 'Off-Broadway' : 'Regional Rep';
+            return (
+              <CollapsiblePanel
+                id="theater-run"
+                title="🎭 On Stage"
+                subtitle={`"${run.title}" at ${run.venue}`}
+                badge={`Week ${run.weeksDone}/${run.weeks}`}
+                defaultOpen={true}
+              >
+                <div style={{ fontSize: '0.9rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                    <div>
+                      <strong style={{ color: 'var(--gold-bright)', fontFamily: "'Playfair Display', serif", fontStyle: 'italic' }}>"{run.title}"</strong>
+                      <span className="ht-text-dim"> · {tierLabel}</span>
+                    </div>
+                    <span className="ht-text-dim" style={{ fontSize: '0.82rem' }}>{weeksLeft} week{weeksLeft === 1 ? '' : 's'} to go</span>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.4)', height: 6, marginBottom: 8 }}>
+                    <div style={{ background: 'var(--gold-bright)', height: '100%', width: `${pct}%`, transition: 'width 0.3s' }} />
+                  </div>
+                  <div className="ht-text-dim" style={{ fontSize: '0.82rem' }}>
+                    Each week brings in <strong style={{ color: 'var(--cream)' }}>{fmtMoneyYear(run.weeklyPay, player.year)}</strong>,
+                    {' '}+{run.weeklySkill.toFixed(1)} actor skill, +{run.weeklyFame.toFixed(2)} fame, -4 energy.
+                    Closing night rolls for rave reviews and a Drama Critics Circle nomination.
+                  </div>
+                </div>
+              </CollapsiblePanel>
+            );
+          })()}
+
           {/* Cameo offers — appears when there are pending or eligibility */}
           {((player.cameoOffers || []).length > 0 ||
             Object.values(player.worldNPCs || {}).some(n => (n.friendshipScore || 0) >= 3)) && (
@@ -14988,11 +15360,13 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         let filteredListings = listings;
         if (castingFilter === 'offers') filteredListings = listings.filter(l => l.kind === 'offer');
         else if (castingFilter === 'auditions') filteredListings = listings.filter(l => l.kind === 'audition');
+        else if (castingFilter === 'commercials') filteredListings = listings.filter(l => l.kind === 'commercial');
+        else if (castingFilter === 'theater') filteredListings = listings.filter(l => l.kind === 'theater');
         else if (castingFilter === 'wheelhouse') filteredListings = listings.filter(l => getGenreSpecialty(player, l.genre));
-        // Apply sort
-        if (castingSort === 'budget') filteredListings = [...filteredListings].sort((a, b) => b.budget - a.budget);
-        else if (castingSort === 'pay') filteredListings = [...filteredListings].sort((a, b) => b.pay - a.pay);
-        else if (castingSort === 'genre') filteredListings = [...filteredListings].sort((a, b) => a.genre.localeCompare(b.genre));
+        // Apply sort (only meaningful for film listings — commercials/theater don't have a genre/budget)
+        if (castingSort === 'budget') filteredListings = [...filteredListings].sort((a, b) => (b.budget || 0) - (a.budget || 0));
+        else if (castingSort === 'pay') filteredListings = [...filteredListings].sort((a, b) => (b.pay || b.weeklyPay || 0) - (a.pay || a.weeklyPay || 0));
+        else if (castingSort === 'genre') filteredListings = [...filteredListings].sort((a, b) => (a.genre || '').localeCompare(b.genre || ''));
 
         return (
         <Panel title="The Casting Board" subtitle="Offers, auditions, and open calls">
@@ -15004,7 +15378,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14, marginTop: 6, padding: '8px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
               <span className="ht-text-dim" style={{ fontSize: '0.78rem', letterSpacing: '0.05em' }}>FILTER:</span>
-              {[['all', 'All'], ['offers', 'Offers'], ['auditions', 'Auditions'], ['wheelhouse', '★ Wheelhouse']].map(([k, lbl]) => (
+              {[['all', 'All'], ['offers', 'Offers'], ['auditions', 'Auditions'], ['commercials', '📺 Commercials'], ['theater', '🎭 Theater'], ['wheelhouse', '★ Wheelhouse']].map(([k, lbl]) => (
                 <button
                   key={k}
                   className={`ht-btn ht-btn-sm ${castingFilter === k ? 'ht-btn-primary' : ''}`}
@@ -15140,6 +15514,123 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                             title={wouldExceedCap ? `You're at the limit for ${ROLE_LABELS[a.playerRole].toLowerCase()} (${commitments[a.playerRole]}/${cap} in flight). Wrap or release one first.` : ''}
                           >
                             {wouldExceedCap ? `🔒 At Limit (${commitments[a.playerRole]}/${cap})` : 'Audition (1 week)'}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* COMMERCIALS section */}
+          {filteredListings.some(l => l.kind === 'commercial') && (
+            <>
+              <div className="ht-label" style={{ marginTop: 18 }}>📺 Commercial Gigs</div>
+              <p className="ht-text-dim" style={{ fontSize: '0.82rem', marginTop: 0, marginBottom: 8 }}>
+                Quick paydays. No script weeks, no festival run — just a shoot day and a check.
+              </p>
+              {filteredListings.filter(l => l.kind === 'commercial').map((c, i) => {
+                const tierLabel = c.tier === 'celebrity' ? 'Celebrity Endorsement' : c.tier === 'national' ? 'National Spot' : 'Regional Ad';
+                const tierColor = c.tier === 'celebrity' ? 'var(--gold-bright)' : c.tier === 'national' ? 'var(--gold)' : 'var(--cream-dim)';
+                return (
+                  <div key={`c-${i}`} className="ht-offer-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                      <div>
+                        <div className="ht-offer-title">
+                          {c.brand[0].toUpperCase() + c.brand.slice(1)}
+                          <span className="ht-tag" style={{ marginLeft: 8, color: tierColor, borderColor: tierColor }}>{tierLabel}</span>
+                        </div>
+                        <div className="ht-text-dim">One shoot day · 1 week</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div><span className="ht-tag">Pay</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(c.pay, player.year)}</strong></div>
+                        <div style={{ marginTop: 4, fontSize: '0.78rem' }}><span className="ht-text-dim">+{c.fameGain} fame</span></div>
+                      </div>
+                    </div>
+                    {c.sellOutRisk > 0 && (
+                      <div style={{ marginTop: 8, fontSize: '0.82rem', color: 'var(--red-bright)', fontStyle: 'italic' }}>
+                        ⚠ At your level of fame, critics sometimes call this selling out.
+                      </div>
+                    )}
+                    <div className="ht-row" style={{ justifyContent: 'flex-end' }}>
+                      {(() => {
+                        const commitments = getRoleCommitments(player);
+                        const cap = ROLE_CAPS.actor;
+                        const wouldExceedCap = (commitments.actor || 0) >= cap;
+                        return (
+                          <button
+                            className="ht-btn ht-btn-sm ht-btn-primary"
+                            onClick={() => acceptCommercial(c)}
+                            disabled={wouldExceedCap || player.activeTheaterRun}
+                            title={player.activeTheaterRun ? 'You\'re mid-run on a play — shooting a commercial would breach the contract.' : (wouldExceedCap ? `You're at the actor limit (${commitments.actor}/${cap}). Wrap one first.` : '')}
+                          >
+                            {wouldExceedCap ? `🔒 At Limit` : `Shoot It · ${fmtMoneyYear(c.pay, player.year)}`}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* THEATER AUDITIONS section */}
+          {filteredListings.some(l => l.kind === 'theater') && (
+            <>
+              <div className="ht-label" style={{ marginTop: 18 }}>🎭 Theater Auditions</div>
+              <p className="ht-text-dim" style={{ fontSize: '0.82rem', marginTop: 0, marginBottom: 8 }}>
+                A real workout. Lower pay than film, but you build the craft. While on stage, you can't take film work.
+              </p>
+              {filteredListings.filter(l => l.kind === 'theater').map((t, i) => {
+                const heat = playerHeat(player, 'actor');
+                const oddsRaw = (heat - t.threshold + 25) / 50;
+                const oddsPct = clamp(Math.round(oddsRaw * 100), 1, 99);
+                const oddsLabel = oddsPct >= 75 ? 'Strong shot' : oddsPct >= 50 ? 'Decent shot' : oddsPct >= 25 ? 'Long shot' : 'Dark horse';
+                const tierLabel = t.tier === 'broadway' ? 'Broadway' : t.tier === 'off-broadway' ? 'Off-Broadway' : 'Regional Rep';
+                const tierColor = t.tier === 'broadway' ? 'var(--gold-bright)' : t.tier === 'off-broadway' ? 'var(--gold)' : 'var(--cream-dim)';
+                return (
+                  <div key={`t-${i}`} className="ht-offer-card" style={t.tier === 'broadway' ? { borderColor: 'var(--gold-bright)', borderWidth: 2 } : {}}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                      <div>
+                        <div className="ht-offer-title">
+                          "{t.title}"
+                          <span className="ht-tag" style={{ marginLeft: 8, color: tierColor, borderColor: tierColor }}>{tierLabel}</span>
+                        </div>
+                        <div className="ht-text-dim">At {t.venue} · {t.weeks}-week run</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div><span className="ht-tag">Weekly</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(t.weeklyPay, player.year)}</strong></div>
+                        <div style={{ marginTop: 4 }}><span className="ht-tag">Run Total</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(t.weeklyPay * t.weeks, player.year)}</strong></div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', marginTop: 8 }}>
+                      <span className="ht-text-dim">Each week: +{t.weeklySkill.toFixed(1)} actor skill, +{t.weeklyFame.toFixed(2)} fame, -4 energy</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
+                      <div style={{ fontSize: '0.85rem' }}>
+                        <span className="ht-text-dim">Reading against {t.competitors} actors</span>
+                        <span style={{ marginLeft: 12, color: oddsPct >= 50 ? '#6fcc4c' : oddsPct >= 25 ? 'var(--gold-bright)' : 'var(--red-bright)' }}>
+                          <Tooltip text="Based on your acting heat vs. the director's bar. Off-the-page auditions still come down to chemistry — long shots happen.">
+                            {oddsLabel} (~{oddsPct}%)
+                          </Tooltip>
+                        </span>
+                      </div>
+                      {(() => {
+                        const commitments = getRoleCommitments(player);
+                        const cap = ROLE_CAPS.actor;
+                        const wouldExceedCap = (commitments.actor || 0) >= cap;
+                        const lockedByRun = !!player.activeTheaterRun;
+                        return (
+                          <button
+                            className="ht-btn ht-btn-sm"
+                            onClick={() => attemptTheaterAudition(t)}
+                            disabled={wouldExceedCap || lockedByRun}
+                            title={lockedByRun ? 'You\'re already on a run.' : (wouldExceedCap ? `Actor slots full (${commitments.actor}/${cap}).` : '')}
+                          >
+                            {lockedByRun ? '🔒 Already on Stage' : (wouldExceedCap ? `🔒 At Limit` : 'Audition (1 week)')}
                           </button>
                         );
                       })()}
