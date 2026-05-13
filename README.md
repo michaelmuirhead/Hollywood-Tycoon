@@ -19,7 +19,15 @@ Then open the URL Vite prints (usually `http://localhost:5173`).
 
 ## Deploying
 
-Push this folder to a GitHub repo and import it at [vercel.com/new](https://vercel.com/new). The Vite preset works out of the box. No environment variables, no backend.
+This is a Vite app — it MUST be built before it can be served. Three working options:
+
+1. **GitHub → Vercel (recommended).** Push this folder to a GitHub repo and import it at [vercel.com/new](https://vercel.com/new). Vercel reads `vercel.json` and runs `vite build` automatically.
+2. **Vercel CLI.** Run `npm i -g vercel` then `vercel` from this folder. The CLI uploads source, builds in the cloud, and deploys.
+3. **Pre-build + drag-and-drop.** Run `npm install && npm run build` locally, then drag *only the `dist/` folder* onto [vercel.com/new](https://vercel.com/new).
+
+> ⚠️ **Do not drag-and-drop the source folder.** Vercel's drag-and-drop deploy serves files as-is and skips the build, so the browser tries to load `/src/main.jsx` directly and fails — you get a blank white screen. Use one of the three options above.
+
+No environment variables, no backend.
 
 ## Target platform
 
