@@ -1879,7 +1879,7 @@ const TABLOID_EVENTS = [
       {
         label: 'Stay silent',
         effects: { scandal: { severity: 2, weeks: 6, desc: 'affair rumors' }, relationshipHealth: -20 },
-        outcome: `${p.personal.partner.name} stops returning your calls for a week.`,
+        outcome: 'Your spouse stops returning your calls for a week.',
       },
     ],
   },
