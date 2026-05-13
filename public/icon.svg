@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Hollywood Tycoon">
+  <title>Hollywood Tycoon</title>
+
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="78%">
+      <stop offset="0%"  stop-color="#2c1e0e"/>
+      <stop offset="55%" stop-color="#150e06"/>
+      <stop offset="100%" stop-color="#070502"/>
+    </radialGradient>
+
+    <linearGradient id="slate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#221809"/>
+      <stop offset="55%" stop-color="#140e07"/>
+      <stop offset="100%" stop-color="#0a0704"/>
+    </linearGradient>
+
+    <linearGradient id="arm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#2c1f10"/>
+      <stop offset="100%" stop-color="#160f07"/>
+    </linearGradient>
+
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#fbe19a"/>
+      <stop offset="38%" stop-color="#f0c460"/>
+      <stop offset="72%" stop-color="#c8932e"/>
+      <stop offset="100%" stop-color="#7a5618"/>
+    </linearGradient>
+
+    <linearGradient id="goldTrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8b94c"/>
+      <stop offset="100%" stop-color="#8a6f2d"/>
+    </linearGradient>
+
+    <radialGradient id="starShine" cx="38%" cy="30%" r="65%">
+      <stop offset="0%"  stop-color="#fff4d4" stop-opacity="0.85"/>
+      <stop offset="55%" stop-color="#f0c460" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="starHalo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#f0c460" stop-opacity="0.55"/>
+      <stop offset="55%"  stop-color="#a87a26" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#a87a26" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="cream" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#f8efd0"/>
+      <stop offset="100%" stop-color="#d4c393"/>
+    </linearGradient>
+
+    <linearGradient id="rayGrad" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%"   stop-color="#d4a64a" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#d4a64a" stop-opacity="0.16"/>
+    </linearGradient>
+
+    <clipPath id="armClip">
+      <rect x="0" y="0" width="700" height="74" rx="10"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Deco rays radiating from upper center -->
+  <g transform="translate(512 380)" opacity="0.7">
+    <polygon points="-26,0 26,0 110,-900 -110,-900" fill="url(#rayGrad)" transform="rotate(-55)"/>
+    <polygon points="-26,0 26,0 110,-900 -110,-900" fill="url(#rayGrad)" transform="rotate(-28)"/>
+    <polygon points="-26,0 26,0 110,-900 -110,-900" fill="url(#rayGrad)"/>
+    <polygon points="-26,0 26,0 110,-900 -110,-900" fill="url(#rayGrad)" transform="rotate(28)"/>
+    <polygon points="-26,0 26,0 110,-900 -110,-900" fill="url(#rayGrad)" transform="rotate(55)"/>
+  </g>
+
+  <!-- Deco frame -->
+  <rect x="58" y="58" width="908" height="908" rx="14" fill="none"
+        stroke="#5a4422" stroke-width="6"/>
+  <rect x="76" y="76" width="872" height="872" rx="8" fill="none"
+        stroke="url(#goldTrim)" stroke-width="3"/>
+
+  <!-- Deco corner brackets -->
+  <g fill="url(#goldTrim)" opacity="0.95">
+    <path d="M 58 220 L 58 58 L 220 58 L 220 76 L 76 76 L 76 220 Z"/>
+    <path d="M 966 220 L 966 58 L 804 58 L 804 76 L 948 76 L 948 220 Z"/>
+    <path d="M 58 804 L 58 966 L 220 966 L 220 948 L 76 948 L 76 804 Z"/>
+    <path d="M 966 804 L 966 966 L 804 966 L 804 948 L 948 948 L 948 804 Z"/>
+  </g>
+
+  <!-- Tiny Deco fan accents at the top -->
+  <g fill="url(#goldTrim)" opacity="0.85">
+    <circle cx="512" cy="100" r="10"/>
+    <rect x="380" y="96" width="100" height="8" rx="3"/>
+    <rect x="544" y="96" width="100" height="8" rx="3"/>
+  </g>
+
+  <!-- ====== STAR HALO (drawn before clapboard so clapboard overlaps slightly) ====== -->
+  <circle cx="512" cy="360" r="290" fill="url(#starHalo)"/>
+
+  <!-- ====== CLAPBOARD ====== -->
+  <g transform="translate(512 660) rotate(-7)">
+
+    <!-- Slate body -->
+    <rect x="-340" y="-130" width="680" height="360" rx="16" fill="url(#slate)"
+          stroke="url(#gold)" stroke-width="7"/>
+    <rect x="-322" y="-112" width="644" height="324" rx="10" fill="none"
+          stroke="#5a4422" stroke-width="2" opacity="0.8"/>
+
+    <!-- Title rows on slate -->
+    <g font-family="Georgia, 'Times New Roman', serif" text-anchor="middle">
+      <text x="0" y="-30" font-size="80" font-weight="700" letter-spacing="6"
+            fill="url(#cream)">HOLLYWOOD</text>
+      <text x="0" y="62"  font-size="80" font-weight="700" letter-spacing="6"
+            fill="#f0c460">TYCOON</text>
+    </g>
+
+    <!-- chalk divider -->
+    <line x1="-280" y1="100" x2="280" y2="100"
+          stroke="#f3e6c4" stroke-width="3" opacity="0.55"/>
+
+    <!-- Field row -->
+    <g font-family="Georgia, serif" letter-spacing="2">
+      <text x="-260" y="172" font-size="34" fill="#c9b885" opacity="0.85">SCENE</text>
+      <text x="-110" y="172" font-size="38" fill="#f3e6c4" font-weight="700">1</text>
+      <text x="-40"  y="172" font-size="34" fill="#c9b885" opacity="0.85">TAKE</text>
+      <text x="80"   y="172" font-size="38" fill="#f3e6c4" font-weight="700">A</text>
+      <text x="140"  y="172" font-size="34" fill="#c9b885" opacity="0.85">YR</text>
+      <text x="220"  y="172" font-size="38" fill="#f3e6c4" font-weight="700">1985</text>
+    </g>
+
+    <!-- Clapper arm: rotated, open, with diagonal stripes -->
+    <g transform="translate(-340 -132) rotate(-13)">
+      <rect x="0" y="0" width="700" height="74" rx="10" fill="url(#arm)"
+            stroke="url(#gold)" stroke-width="6"/>
+
+      <g clip-path="url(#armClip)" fill="url(#cream)">
+        <polygon points="0,0 70,0 0,74"/>
+        <polygon points="90,0 170,0 100,74 20,74"/>
+        <polygon points="190,0 270,0 200,74 120,74"/>
+        <polygon points="290,0 370,0 300,74 220,74"/>
+        <polygon points="390,0 470,0 400,74 320,74"/>
+        <polygon points="490,0 570,0 500,74 420,74"/>
+        <polygon points="590,0 670,0 600,74 520,74"/>
+        <polygon points="690,0 760,0 700,74 620,74"/>
+      </g>
+
+      <!-- subtle inner shadow line on top edge of arm -->
+      <line x1="2" y1="4" x2="698" y2="4" stroke="#0a0704" stroke-width="2" opacity="0.6"/>
+
+      <!-- Hinge pin (left end) -->
+      <circle cx="22" cy="37" r="18" fill="#1a1208" stroke="url(#gold)" stroke-width="5"/>
+      <circle cx="22" cy="37" r="5"  fill="#f0c460"/>
+    </g>
+  </g>
+
+  <!-- ====== GOLD STAR ====== centered upper region -->
+  <!-- Five-pointed star inscribed in radius 215, centered at (512, 360).
+       Points: (sin(k*72°)*r, -cos(k*72°)*r) outer, alternating with inner at r*0.382. -->
+  <g transform="translate(512 360)">
+    <!-- Dark backing star for crisp outline -->
+    <path d="M 0 -240
+             L 56.4 -77.6
+             L 228.3 -74.1
+             L 91.3 28.3
+             L 141.1 192.1
+             L 0 96.5
+             L -141.1 192.1
+             L -91.3 28.3
+             L -228.3 -74.1
+             L -56.4 -77.6 Z"
+          fill="#1a1208"/>
+
+    <!-- Gold star body -->
+    <path d="M 0 -220
+             L 51.7 -71.1
+             L 209.3 -67.9
+             L 83.7 25.9
+             L 129.4 176.1
+             L 0 88.5
+             L -129.4 176.1
+             L -83.7 25.9
+             L -209.3 -67.9
+             L -51.7 -71.1 Z"
+          fill="url(#gold)" stroke="#5a4422" stroke-width="3"/>
+
+    <!-- Soft highlight overlay -->
+    <path d="M 0 -220
+             L 51.7 -71.1
+             L 209.3 -67.9
+             L 83.7 25.9
+             L 129.4 176.1
+             L 0 88.5
+             L -129.4 176.1
+             L -83.7 25.9
+             L -209.3 -67.9
+             L -51.7 -71.1 Z"
+          fill="url(#starShine)"/>
+
+    <!-- Inner mini-star for sparkle -->
+    <path d="M 0 -64
+             L 15.0 -20.7
+             L 60.8 -19.8
+             L 24.3 7.5
+             L 37.6 51.2
+             L 0 25.7
+             L -37.6 51.2
+             L -24.3 7.5
+             L -60.8 -19.8
+             L -15.0 -20.7 Z"
+          fill="#fff4d4" opacity="0.45"/>
+  </g>
+</svg>
