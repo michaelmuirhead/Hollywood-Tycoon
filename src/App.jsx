@@ -52,16 +52,56 @@ const GENRES = [
   'Romance', 'Thriller', 'Animation', 'Indie',
 ];
 
-const FIRST_NAMES = [
-  'Vera', 'Marlon', 'Greta', 'Cary', 'Ingrid', 'Orson', 'Rita', 'Humphrey',
-  'Ava', 'Clark', 'Audrey', 'Sidney', 'Lauren', 'Kirk', 'Joan', 'Errol',
-  'Gene', 'Bette', 'Spencer', 'Hedy', 'Tyrone', 'Lana', 'Robert', 'Myrna',
+// Era-fitting first names split by gender so we can pick names that read
+// naturally as male/female for the 1985 working Hollywood demographic. Mix
+// captures the breadth of the industry: classic Hollywood, Italian, Latin,
+// Jewish, African-American, and Asian-American performers all represented.
+const MALE_FIRST_NAMES = [
+  'Marlon', 'Cary', 'Orson', 'Humphrey', 'Clark', 'Sidney', 'Kirk', 'Errol',
+  'Gene', 'Spencer', 'Tyrone', 'Robert', 'William', 'Frank', 'Charles',
+  'Edward', 'Joseph', 'Richard', 'Arthur', 'Walter', 'Stanley', 'Howard',
+  'Leonard', 'Eugene', 'Sammy', 'Harry', 'James', 'Bruce', 'Lee', 'Jack',
+  'Saul', 'Murray', 'Irving', 'Mordecai', 'Sol',
+  'Luigi', 'Carlos', 'Paolo', 'Vito', 'Antonio', 'Marco', 'Luis', 'Diego',
+  'Lorenzo', 'Salvatore', 'Vincent',
+  'Reese', 'Henry', 'Forrest', 'Cole', 'Marcus', 'Jude', 'Atticus', 'Quentin',
+  'Lev', 'Walter', 'Roman', 'Harlan', 'Tobias', 'Cyrus', 'Bishop',
 ];
 
+const FEMALE_FIRST_NAMES = [
+  'Vera', 'Greta', 'Ingrid', 'Rita', 'Ava', 'Audrey', 'Lauren', 'Joan',
+  'Bette', 'Hedy', 'Lana', 'Myrna', 'Margaret', 'Ruth', 'Helen', 'Dorothy',
+  'Florence', 'Hazel', 'Mildred', 'Geraldine', 'Beatrice', 'Constance',
+  'Pauline', 'Adelaide', 'Edith',
+  'Sofia', 'Gabriela', 'Isabella', 'Carmen', 'Lucia', 'Renata', 'Anita',
+  'Diahann', 'Cicely', 'Ruby', 'Lena', 'Phylicia', 'Eartha',
+  'Esther', 'Miriam', 'Leah', 'Shoshana',
+  'Mei', 'Anna', 'Connie', 'Akiko',
+  'Vivienne', 'Eleanor', 'Margot', 'Naomi', 'Theodora', 'Maxine',
+  'Sara', 'Imogen', 'Mira', 'Helena', 'Ophelia', 'Rosalind', 'Diane',
+];
+
+// Combined pool kept around for legacy call sites (they don't care about gender).
+const FIRST_NAMES = [...MALE_FIRST_NAMES, ...FEMALE_FIRST_NAMES];
+
 const LAST_NAMES = [
+  // Classic Hollywood-feel surnames
   'Crawford', 'Sterling', 'Lamont', 'Marlowe', 'Ashby', 'Devereaux', 'Vance',
   'Holloway', 'Sinclair', 'Beaumont', 'Cassidy', 'Whitlock', 'Pemberton',
   'Castellano', 'Fairchild', 'Rourke', 'Bellamy', 'Thorne', 'Calloway',
+  'Ardent', 'Beauclair', 'Brackett', 'Calabria', 'Cole', 'Crewe', 'Donnelly',
+  'Frost', 'Halford', 'Innes', 'Larch', 'McKenna', 'Pierce', 'Reeves',
+  'Sands', 'Sokolov', 'Wexler', 'Aldridge', 'Voss', 'Ashford', 'Carrington',
+  'Whitmore', 'Ashworth', 'Halloran',
+  // Italian / Spanish / Latin
+  'Cabrera', 'D\'Angelo', 'Esposito', 'Mendoza', 'Rivera', 'Santiago',
+  'Marchetti', 'Ferrara', 'Bonetti',
+  // Jewish-coded
+  'Levin', 'Goldberg', 'Mandelbaum', 'Rosenthal',
+  // East Asian
+  'Tanaka', 'Nakamura', 'Park', 'Chen', 'Wong',
+  // African American common
+  'Washington', 'Robinson', 'Coleman', 'Banks', 'Booker',
 ];
 
 const STUDIO_PREFIXES = ['Silver', 'Golden', 'Crimson', 'Sunset', 'Apex', 'Monolith', 'Pinnacle', 'Lone Star', 'Liberty', 'Empire'];
@@ -332,8 +372,19 @@ function evolveWorldForNewGeneration(retiredPlayer, yearsToSkip = 3) {
   };
 }
 
-function generateName() {
-  return `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`;
+function generateName(gender = null) {
+  let firstPool;
+  if (gender === 'male') firstPool = MALE_FIRST_NAMES;
+  else if (gender === 'female') firstPool = FEMALE_FIRST_NAMES;
+  else firstPool = FIRST_NAMES;
+  return `${pick(firstPool)} ${pick(LAST_NAMES)}`;
+}
+
+// Display label that respects gender for actor roles. Other roles are
+// gender-neutral (director, producer, writer don't get gendered labels).
+function getRoleDisplayLabel(role, gender) {
+  if (role === 'actor' && gender === 'female') return 'Actress';
+  return ROLE_LABELS[role] || role;
 }
 
 function generateStudioName(playerName) {
@@ -3065,6 +3116,219 @@ const NPC_ARCHETYPES = [
   'Has-Been', 'Fading Star', 'Up-and-Comer', 'Industry Veteran',
 ];
 
+// ===== CURATED NPC ROSTER =====
+//
+// A hand-built cast of fictional industry figures. Each game seeds a random
+// subset (so some show up consistently, others vary), filling out the world
+// with named faces who carry recognizable archetypes. These are the people the
+// player keeps running into across a career — competing at award ceremonies,
+// turning up in offer crews, getting reunited with on a sequel.
+//
+// Schema: { name, role, gender, archetype, age, fame, bio, trajectory? }
+const CURATED_NPCS = [
+  // ===== ACTORS (male) =====
+  {
+    name: 'Marcus Thorne', role: 'actor', gender: 'male',
+    archetype: 'Method Star', age: 47, fame: 88,
+    bio: 'Stayed in character for the entire shoot of The Cargo Run. Won the Oscar that year. Hasn\'t made eye contact with a journalist since.',
+    trajectory: 0,
+  },
+  {
+    name: 'Reese Calloway', role: 'actor', gender: 'male',
+    archetype: 'Box Office Draw', age: 39, fame: 82,
+    bio: 'Romantic leads when he wants them, action when the script\'s right. Charming, profitable, never difficult. Studio favorite.',
+    trajectory: 1,
+  },
+  {
+    name: 'Henry Ardent', role: 'actor', gender: 'male',
+    archetype: 'Fading Star', age: 61, fame: 45,
+    bio: 'A leading man in the late 60s. Now does character work and complains about it loudly. Critics still love him. Drinks at lunch.',
+    trajectory: -1,
+  },
+  {
+    name: 'Jude Beauclair', role: 'actor', gender: 'male',
+    archetype: 'Up-and-Comer', age: 26, fame: 38,
+    bio: 'Stage-trained at Juilliard, blew up off a single Sundance picture. Reading every script that comes in. Refuses franchise paper.',
+    trajectory: 1,
+  },
+  {
+    name: 'Forrest McKenna', role: 'actor', gender: 'male',
+    archetype: 'Action Hero', age: 44, fame: 72,
+    bio: 'Does his own stunts. Two broken ribs and counting. The PR fire from his second divorce died down a year ago. Mostly.',
+    trajectory: 0,
+  },
+  {
+    name: 'Cole Vance', role: 'actor', gender: 'male',
+    archetype: 'Comedy Icon', age: 51, fame: 79,
+    bio: 'Defined the screwball renaissance of the 70s. Trying to make people take him seriously now. The Oscar campaign is exhausting everyone.',
+    trajectory: 0,
+  },
+  {
+    name: 'Sammy Booker', role: 'actor', gender: 'male',
+    archetype: 'Industry Veteran', age: 58, fame: 70,
+    bio: 'Forty years on screen, never the lead. The face you know from a hundred films. Quietly the best-paid character actor in town.',
+    trajectory: 0,
+  },
+
+  // ===== ACTRESSES (female) =====
+  {
+    name: 'Vivienne Sterling', role: 'actor', gender: 'female',
+    archetype: 'Awards Magnet', age: 42, fame: 90,
+    bio: 'Three Oscars. Two divorces from her directors. Picks the impossible material and does the impossible thing with it.',
+    trajectory: 0,
+  },
+  {
+    name: 'Margot Crewe', role: 'actor', gender: 'female',
+    archetype: 'Critics\' Darling', age: 35, fame: 75,
+    bio: 'Indie queen. Refused studio money for ten years and counting. Just signed her first big-budget picture. Everyone has opinions.',
+    trajectory: 1,
+  },
+  {
+    name: 'Naomi Ashford', role: 'actor', gender: 'female',
+    archetype: 'Box Office Draw', age: 31, fame: 82,
+    bio: 'Action heroine. Broke out of a 1983 sci-fi picture. Negotiates her own contracts. Studios have learned not to lowball her.',
+    trajectory: 1,
+  },
+  {
+    name: 'Eleanor Voss', role: 'actor', gender: 'female',
+    archetype: 'Industry Veteran', age: 67, fame: 68,
+    bio: 'Studio system survivor. Mentored half the current A-list. Doesn\'t suffer fools, doesn\'t do morning shows, doesn\'t need to.',
+    trajectory: -1,
+  },
+  {
+    name: 'Rosalind Pierce', role: 'actor', gender: 'female',
+    archetype: 'Method Star', age: 28, fame: 55,
+    bio: 'Difficult on set. Worth it. Three nominations in five years. Costars either adore her or never speak her name again.',
+    trajectory: 1,
+  },
+  {
+    name: 'Diane Holloway', role: 'actor', gender: 'female',
+    archetype: 'Box Office Draw', age: 38, fame: 70,
+    bio: 'Romcom queen of the early 80s. Wants to direct. Has a script. Has a backer. Studio is "circling."',
+    trajectory: 0,
+  },
+  {
+    name: 'Cicely Coleman', role: 'actor', gender: 'female',
+    archetype: 'Critics\' Darling', age: 49, fame: 62,
+    bio: 'The actress every other actress wants to play opposite. A working career built on impossible scenes done in one take.',
+    trajectory: 0,
+  },
+
+  // ===== DIRECTORS =====
+  {
+    name: 'Atticus Cole', role: 'director', gender: 'male',
+    archetype: 'Indie Auteur', age: 44, fame: 75,
+    bio: 'Long-take obsessive. Every film a critic\'s puzzle. Has called every studio executive he\'s worked with by their last name only.',
+    trajectory: 0,
+  },
+  {
+    name: 'Saul Vance', role: 'director', gender: 'male',
+    archetype: 'Studio Workhorse', age: 58, fame: 65,
+    bio: 'Reliable, on time, on budget. One Best Director nomination, no win. Will never be invited to Cannes. Gets the job done.',
+    trajectory: 0,
+  },
+  {
+    name: 'Theodora Marlowe', role: 'director', gender: 'female',
+    archetype: 'Awards Magnet', age: 51, fame: 80,
+    bio: 'Two Oscars, both for international co-productions. The female director the industry points to when asked. She has thoughts about that.',
+    trajectory: 0,
+  },
+  {
+    name: 'Quentin Brackett', role: 'director', gender: 'male',
+    archetype: 'Action Hero', age: 39, fame: 70,
+    bio: 'Started as a set carpenter. Choreographs his own action. Studios send him their messy second-unit scripts and watch him fix them.',
+    trajectory: 1,
+  },
+  {
+    name: 'Lev Sokolov', role: 'director', gender: 'male',
+    archetype: 'Critics\' Darling', age: 47, fame: 60,
+    bio: 'European exile. Made his name with Cold War art-house. Got a $40M studio budget once. Disaster. They still send him offers.',
+    trajectory: -1,
+  },
+  {
+    name: 'Maxine Reeves', role: 'director', gender: 'female',
+    archetype: 'Up-and-Comer', age: 33, fame: 50,
+    bio: 'Music videos for the biggest acts of the early 80s. Just got her first feature greenlit. Visual style is the entire selling point.',
+    trajectory: 1,
+  },
+
+  // ===== WRITERS =====
+  {
+    name: 'Walter Innes', role: 'writer', gender: 'male',
+    archetype: 'Industry Veteran', age: 70, fame: 35,
+    bio: 'Three Oscars across forty years. Lives in upstate New York. Has never owned a Los Angeles property. Faxes pages in.',
+    trajectory: -1,
+  },
+  {
+    name: 'Sara Bellamy', role: 'writer', gender: 'female',
+    archetype: 'Critics\' Darling', age: 41, fame: 45,
+    bio: 'Smart female-led dramas. Adapts her own novels. There\'s a sub-clause in every contract that says she stays on set.',
+    trajectory: 1,
+  },
+  {
+    name: 'Roman Castellano', role: 'writer', gender: 'male',
+    archetype: 'Studio Workhorse', age: 53, fame: 30,
+    bio: 'Punch-up specialist. Saved a dozen tentpoles uncredited and prefers it that way. Cashes the checks, doesn\'t take the meetings.',
+    trajectory: 0,
+  },
+  {
+    name: 'Harlan Wexler', role: 'writer', gender: 'male',
+    archetype: 'Comedy Icon', age: 47, fame: 42,
+    bio: 'Wrote the biggest comedies of the late 70s. Drinks. Slowing down. The young writers in town still quote his second act structure.',
+    trajectory: -1,
+  },
+  {
+    name: 'Imogen Pierce', role: 'writer', gender: 'female',
+    archetype: 'Up-and-Comer', age: 29, fame: 25,
+    bio: 'Black List darling. Three scripts in development at three studios. Nothing greenlit yet. Everyone thinks they discovered her first.',
+    trajectory: 1,
+  },
+  {
+    name: 'Tobias Larch', role: 'writer', gender: 'male',
+    archetype: 'Method Star', age: 38, fame: 33,
+    bio: 'Recluse. Spends years on each script. When his films get made they win awards. Refuses to write a sequel of anything.',
+    trajectory: 0,
+  },
+
+  // ===== PRODUCERS =====
+  {
+    name: 'Cyrus Halford', role: 'producer', gender: 'male',
+    archetype: 'Industry Veteran', age: 71, fame: 55,
+    bio: 'Old guard. Built three studios. Pulls cast on talent rather than money. The last person in town who still takes a meeting in person.',
+    trajectory: -1,
+  },
+  {
+    name: 'Mira Calabria', role: 'producer', gender: 'female',
+    archetype: 'Awards Magnet', age: 49, fame: 60,
+    bio: 'Indie producer who got rich. Specializes in challenging material. Two Oscar nominations for Best Picture. No win yet.',
+    trajectory: 0,
+  },
+  {
+    name: 'Bishop Donnelly', role: 'producer', gender: 'male',
+    archetype: 'Box Office Draw', age: 56, fame: 65,
+    bio: 'Tentpole specialist. Three of the top-ten grossers of the 70s have his name on them. Drives a car the same color as the money.',
+    trajectory: 0,
+  },
+  {
+    name: 'Helena Frost', role: 'producer', gender: 'female',
+    archetype: 'Studio Workhorse', age: 44, fame: 48,
+    bio: 'Studio executive turned independent. Six films a year. All profitable. The trades call her "the most dangerous woman in town" — she likes that.',
+    trajectory: 1,
+  },
+  {
+    name: 'Vincent Aldridge', role: 'producer', gender: 'male',
+    archetype: 'Comedy Icon', age: 51, fame: 50,
+    bio: 'Frat-pack producer. Knows his lane. Owns a beach house and a Sunday morning brunch table at the Polo Lounge.',
+    trajectory: 0,
+  },
+  {
+    name: 'Ophelia Sands', role: 'producer', gender: 'female',
+    archetype: 'Up-and-Comer', age: 36, fame: 40,
+    bio: 'New money, taste for prestige. Has eight films in development and the patience to see all of them through. Or so she says.',
+    trajectory: 1,
+  },
+];
+
 // Generate a single NPC. tier influences starting fame.
 function generateWorldNPC(currentYear, tier = 'mid') {
   // Pick specialty (weighted)
@@ -3086,10 +3350,12 @@ function generateWorldNPC(currentYear, tier = 'mid') {
   const age = randInt(ageMin, ageMax);
   const fame = randInt(fameMin, fameMax);
   const skill = clamp(fame + randInt(-10, 15), 20, 95);
+  const gender = Math.random() < 0.5 ? 'male' : 'female';
 
   return {
     id: `npc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    name: generateName(),
+    name: generateName(gender),
+    gender,
     role: spec.role,
     roleLabel: spec.label,
     archetype: pick(NPC_ARCHETYPES),
@@ -3111,29 +3377,71 @@ function generateWorldNPC(currentYear, tier = 'mid') {
   };
 }
 
-// Seed the world with a starting roster of NPCs
+// Build an NPC from a curated roster entry. Seeds richer biographical detail
+// (named character, archetype-fit age/fame, hand-written bio) than the
+// procedural generator.
+function buildCuratedNPC(entry, startYear, idx) {
+  const ageInYears = entry.age;
+  const fame = entry.fame;
+  return {
+    id: `npc_curated_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+    name: entry.name,
+    gender: entry.gender,
+    role: entry.role,
+    roleLabel: NPC_SPECIALTIES.find(s => s.role === entry.role)?.label || entry.role,
+    archetype: entry.archetype,
+    age: ageInYears,
+    bornYear: startYear - ageInYears,
+    fame,
+    peakFame: fame,
+    skill: clamp(fame + randInt(-5, 10), 30, 95),
+    careerStart: startYear - randInt(2, Math.max(2, ageInYears - 18)),
+    // Curated NPCs have richer back-history — they've been working for a while
+    filmCount: randInt(Math.max(2, Math.floor((ageInYears - 22) / 4)), Math.max(3, ageInYears - 22)),
+    awardWins: randInt(Math.floor(fame / 30), Math.max(1, Math.floor(fame / 18))),
+    awardNoms: randInt(Math.floor(fame / 18), Math.max(2, Math.floor(fame / 10))),
+    status: 'active',
+    rivalryScore: 0,
+    friendshipScore: 0,
+    history: [],
+    trajectory: entry.trajectory ?? 0,
+    bio: entry.bio,
+    curated: true,
+  };
+}
+
+// Seed the world with a starting roster of NPCs. Mix of curated named figures
+// (always some show up; the specific lineup varies game-to-game) plus
+// procedural fill so the industry feels populated and unpredictable.
 function seedWorldNPCs(startYear) {
   const npcs = {};
-  // 2 top-tier stars
-  for (let i = 0; i < 2; i++) {
+
+  // Pull 10 curated NPCs (random subset, varies per game)
+  const curatedShuffled = CURATED_NPCS.slice().sort(() => Math.random() - 0.5);
+  const curatedCount = Math.min(10, curatedShuffled.length);
+  for (let i = 0; i < curatedCount; i++) {
+    const npc = buildCuratedNPC(curatedShuffled[i], startYear, i);
+    npcs[npc.id] = npc;
+  }
+
+  // Fill out the rest with procedural NPCs across tiers
+  for (let i = 0; i < 1; i++) {
     const npc = generateWorldNPC(startYear, 'top');
     npcs[npc.id] = npc;
   }
-  // 4 mid-tier
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 2; i++) {
     const npc = generateWorldNPC(startYear, 'high');
     npcs[npc.id] = npc;
   }
-  // 4 working
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 2; i++) {
     const npc = generateWorldNPC(startYear, 'mid');
     npcs[npc.id] = npc;
   }
-  // 2 low-tier (rising or fading)
   for (let i = 0; i < 2; i++) {
     const npc = generateWorldNPC(startYear, 'low');
     npcs[npc.id] = npc;
   }
+
   return npcs;
 }
 
@@ -10233,9 +10541,14 @@ function WorldView({ player, onSignFirstLook, onCancelFirstLook, firstLookCost, 
                     {isRetired && <span className="ht-tag" style={{ marginLeft: 8 }}>Retired</span>}
                   </div>
                   <div className="ht-text-dim" style={{ fontSize: '0.85rem' }}>
-                    {npc.archetype} {npc.roleLabel.toLowerCase()} · age {npc.age}
+                    {npc.archetype} {getRoleDisplayLabel(npc.role, npc.gender).toLowerCase()} · age {npc.age}
                     {!isRetired && <span style={{ color: traj.color, marginLeft: 8 }}>{traj.arrow} {traj.label}</span>}
                   </div>
+                  {npc.bio && (
+                    <div style={{ fontSize: '0.85rem', marginTop: 4, fontStyle: 'italic', color: 'var(--cream-dim)', lineHeight: 1.4 }}>
+                      {npc.bio}
+                    </div>
+                  )}
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: '1.1rem', color: 'var(--gold-bright)', fontWeight: 700 }}>Fame {npc.fame}</div>
