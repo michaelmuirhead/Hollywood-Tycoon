@@ -1879,7 +1879,7 @@ const TABLOID_EVENTS = [
       {
         label: 'Stay silent',
         effects: { scandal: { severity: 2, weeks: 6, desc: 'affair rumors' }, relationshipHealth: -20 },
-        outcome: 'Your spouse stops returning your calls for a week.',
+        outcome: (p) => `${p.personal.partner.name} stops returning your calls for a week.`,
       },
     ],
   },
@@ -2903,6 +2903,16 @@ const TABLOID_EVENTS = [
 
 // Pick a tabloid event applicable to current state, or null if none.
 // Uses fame tier filtering, weight-based selection, anti-repeat memory.
+// Resolve any function-valued `outcome` fields on a template's choices into
+// strings, so downstream code (modal, archive, log) can treat them uniformly.
+// Templates may use `outcome: (p, ctx) => string` to interpolate player state.
+function resolveChoiceOutcomes(choices, player, ctx) {
+  return choices.map(c => ({
+    ...c,
+    outcome: typeof c.outcome === 'function' ? c.outcome(player, ctx) : c.outcome,
+  }));
+}
+
 function chooseTabloidEvent(player) {
   const recentIds = (player.tabloidHistory || [])
     .slice(-15)
@@ -2960,7 +2970,7 @@ function chooseTabloidEvent(player) {
     id: chosen.id,
     headline,
     flavor,
-    choices: chosen.choices,
+    choices: resolveChoiceOutcomes(chosen.choices, player, ctx),
     tags: chosen.tags || [],
     ctx, // preserve context (e.g., rivalId, friendName) for outcome resolution
   };
@@ -2975,7 +2985,7 @@ function buildChainEvent(eventId, player) {
     id: template.id,
     headline: genTabloidHeadline(template, player, ctx),
     flavor: typeof template.flavor === 'function' ? template.flavor(player, ctx) : template.flavor,
-    choices: template.choices,
+    choices: resolveChoiceOutcomes(template.choices, player, ctx),
     tags: template.tags || [],
     ctx,
   };
@@ -5287,12 +5297,7 @@ const STYLES = `
 
   /* ===== PRESS CLIPPING (archive view) ===== */
   .ht-clipping {
-    background: linear-gradient(180deg, #f3e6c4 0%, #e8d6a8 100%);
-    color: #2a1d0d;
-    padding: 18px 22px;
-    margin-bottom: 14px;
-    border: 1px solid #5a4422;
-    box-shadow: 2px 2px 6px rgba(0,0,0,0.4);
+    background-color: #f3e6c4;
     background-image:
       repeating-linear-gradient(
         0deg,
@@ -5300,7 +5305,13 @@ const STYLES = `
         rgba(139, 110, 50, 0.04) 1px,
         transparent 1px,
         transparent 22px
-      );
+      ),
+      linear-gradient(180deg, #f3e6c4 0%, #e8d6a8 100%);
+    color: #2a1d0d;
+    padding: 18px 22px;
+    margin-bottom: 14px;
+    border: 1px solid #5a4422;
+    box-shadow: 2px 2px 6px rgba(0,0,0,0.4);
     font-family: 'Crimson Pro', Georgia, serif;
     transform: rotate(-0.2deg);
   }
@@ -11961,6 +11972,13 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     advanceWeek(1);
   };
 
+  // Advance time without doing anything — useful for waiting on cameos,
+  // first-look pitches, in-theaters grosses, etc.
+  const waitWeek = () => {
+    addLog('Time', 'A quiet week passes.');
+    advanceWeek(1);
+  };
+
   // ---------- PRODUCTION STATE MACHINE ----------
   // startProduction is called from ProjectBuilder. It builds a production object
   // and routes into the pre-production phase.
@@ -13177,6 +13195,9 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
               </button>
               <button className="ht-btn" onClick={sideJob}>
                 💵 Side Gig
+              </button>
+              <button className="ht-btn" onClick={waitWeek} title="Let a week pass — useful for waiting on cameos, pitches, or films in theaters">
+                ⏭ Advance Week
               </button>
               {player.awards.history.length > 0 && (
                 <button className="ht-btn" onClick={() => setView('awards')}>
