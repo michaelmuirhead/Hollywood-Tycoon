@@ -53,7 +53,7 @@ const GENRES = [
 ];
 
 // Era-fitting first names split by gender so we can pick names that read
-// naturally as male/female for the 1985 working Hollywood demographic. Mix
+// naturally as male/female for a 1970s-era working Hollywood demographic. Mix
 // captures the breadth of the industry: classic Hollywood, Italian, Latin,
 // Jewish, African-American, and Asian-American performers all represented.
 const MALE_FIRST_NAMES = [
@@ -129,6 +129,44 @@ function fmtMoney(n) {
   return `$${Math.round(n)}`;
 }
 
+// ---------- INFLATION MODEL ----------
+//
+// All monetary values in the engine are stored in a constant base unit:
+// "1985 dollars." This keeps the simulation math (box-office multipliers,
+// budget ratios, profit calculations) calibrated to a single anchor.
+//
+// Display dollars are produced by multiplying through inflationFactor(year),
+// so a player starting in 1970 sees period-appropriate numbers, and a
+// 30-year career or a multi-generation save naturally tracks the changing
+// scale of Hollywood economics as time advances.
+//
+// Anchor table: U.S. CPI-U annual averages, normalized so 1985 = 1.00.
+const INFLATION_ANCHORS = {
+  1950: 0.224, 1955: 0.249, 1960: 0.275, 1965: 0.294,
+  1970: 0.360, 1975: 0.501, 1980: 0.766, 1985: 1.000,
+  1990: 1.245, 1995: 1.418, 2000: 1.625, 2005: 1.795,
+  2010: 2.040, 2015: 2.197, 2020: 2.430, 2025: 2.965,
+};
+function inflationFactor(year) {
+  if (!year || !Number.isFinite(year)) return 1;
+  if (year <= 1950) return INFLATION_ANCHORS[1950];
+  if (year >= 2025) return INFLATION_ANCHORS[2025];
+  const lower = Math.floor(year / 5) * 5;
+  const upper = lower + 5;
+  const t = (year - lower) / 5;
+  return INFLATION_ANCHORS[lower] * (1 - t) + INFLATION_ANCHORS[upper] * t;
+}
+// Format a base-1985 amount in the dollars of a given year (defaults to 1985).
+function fmtMoneyYear(amount, year) {
+  return fmtMoney((amount || 0) * inflationFactor(year));
+}
+// Convert a value the player entered in display-dollars back into 1985-base
+// dollars for storage. Used at input boundaries (budget pickers, deposits).
+function toBaseDollars(displayAmount, year) {
+  const f = inflationFactor(year);
+  return f > 0 ? displayAmount / f : displayAmount;
+}
+
 // ---------- SAVE / LOAD ----------
 //
 // Storage strategy:
@@ -185,8 +223,8 @@ function unpackSave(raw) {
     pendingChain: p.pendingChain || null,
     lastPlantedAt: p.lastPlantedAt || null,
     activeProduction: p.activeProduction || null,
-    worldNPCs: p.worldNPCs || seedWorldNPCs(p.year || 1985),
-    lastNPCTickYear: p.lastNPCTickYear || p.year || 1985,
+    worldNPCs: p.worldNPCs || seedWorldNPCs(p.year || 1970),
+    lastNPCTickYear: p.lastNPCTickYear || p.year || 1970,
     legacy: p.legacy || null,
     status: p.status || 'active',
     // If genreCredits missing, reconstruct from film history
@@ -355,7 +393,7 @@ function evolveWorldForNewGeneration(retiredPlayer, yearsToSkip = 3) {
   const legend = {
     name: retiredPlayer.name,
     startingRole: retiredPlayer.startingRole,
-    yearsActive: `${retiredPlayer.startYear || 1985}–${retiredPlayer.year}`,
+    yearsActive: `${retiredPlayer.startYear || 1970}–${retiredPlayer.year}`,
     legacyTier: retiredPlayer.legacy?.tier?.label || 'Working Pro',
     legacyScore: retiredPlayer.legacy?.score || 0,
     bestFilm: retiredPlayer.legacy?.bestFilm?.title || null,
@@ -420,7 +458,7 @@ function initialPlayer(name, startingRole, inheritedWorld = null) {
   const skills = { actor: 5, director: 5, producer: 5, writer: 5 };
   const reputation = { actor: 0, director: 0, producer: 0, writer: 0 };
   skills[startingRole] = 15;
-  const startYear = inheritedWorld?.newStartYear || 1985;
+  const startYear = inheritedWorld?.newStartYear || 1970;
   return {
     name,
     startingRole,
@@ -1009,22 +1047,23 @@ const CRAFT_AWARD_CATEGORIES = [
 // at the cost of delayed release and lost opening weekend momentum.
 const FESTIVALS = [
   {
-    id: 'sundance',
-    name: 'Sundance Film Festival',
-    shortName: 'Sundance',
-    weekStart: 3,
-    weekEnd: 5,
-    location: 'Park City, Utah',
+    id: 'nyff',
+    name: 'New York Film Festival',
+    shortName: 'New York',
+    weekStart: 39,
+    weekEnd: 41,
+    location: 'Lincoln Center, New York',
     entryFee: 5_000,
-    // Favors indie sensibilities — small budget films love it here
-    budgetSweetSpot: [500_000, 8_000_000],
-    qualityThreshold: 60,
-    acceptanceBase: 0.4,
-    criticBoost: 8,
-    audienceCost: 3, // small audience hit from buzz delay
-    awardScoreBoost: 4,
-    prestigeGenres: ['Drama', 'Indie', 'Comedy'],
-    blurb: 'Discovery festival. Indie sensibilities. Low budget films get the spotlight.',
+    // Lincoln Center's flagship — non-competitive but the cinephile imprimatur of the East Coast.
+    // Favors auteur cinema, foreign films, and serious-minded American drama.
+    budgetSweetSpot: [500_000, 12_000_000],
+    qualityThreshold: 62,
+    acceptanceBase: 0.35,
+    criticBoost: 12,
+    audienceCost: 3,
+    awardScoreBoost: 5,
+    prestigeGenres: ['Drama', 'Romance', 'Comedy'],
+    blurb: 'Lincoln Center prestige. Curatorial, not competitive. A New York selection means the critics are paying attention.',
   },
   {
     id: 'cannes',
@@ -1061,21 +1100,21 @@ const FESTIVALS = [
     blurb: 'Auteur cinema. Awards-bait gold. European cred translates to Oscar campaigns.',
   },
   {
-    id: 'toronto',
-    name: 'Toronto International Film Festival',
-    shortName: 'Toronto',
-    weekStart: 37,
-    weekEnd: 39,
-    location: 'Toronto, Canada',
+    id: 'berlin',
+    name: 'Berlin International Film Festival',
+    shortName: 'Berlin',
+    weekStart: 7,
+    weekEnd: 9,
+    location: 'Berlin, West Germany',
     entryFee: 12_000,
-    budgetSweetSpot: [4_000_000, 50_000_000],
-    qualityThreshold: 64,
-    acceptanceBase: 0.40,
-    criticBoost: 10,
-    audienceCost: 2, // mild — TIFF's a populist fest
-    awardScoreBoost: 6,
-    prestigeGenres: ['Drama', 'Comedy', 'Romance', 'Thriller'],
-    blurb: 'Populist prestige. Audience-friendly. Strong pre-buzz for a wide release.',
+    budgetSweetSpot: [2_000_000, 40_000_000],
+    qualityThreshold: 66,
+    acceptanceBase: 0.32,
+    criticBoost: 11,
+    audienceCost: 3,
+    awardScoreBoost: 7,
+    prestigeGenres: ['Drama', 'Thriller', 'Romance'],
+    blurb: 'Cold War crossroads. Politically charged programming. A Golden Bear plays well with European critics and the Academy alike.',
   },
 ];
 
@@ -2072,7 +2111,7 @@ const TABLOID_EVENTS = [
       {
         label: 'Reach out personally',
         effects: { fame: 3 },
-        outcome: 'You sent a handwritten note. The family shared it. It went viral (for 1985 values of viral).',
+        outcome: 'You sent a handwritten note. The family shared it. Magazines picked it up. The chain letter version is making rounds.',
       },
       {
         label: 'Quietly send something through your team',
@@ -3132,7 +3171,7 @@ const CURATED_NPCS = [
   { name: 'Marcus Thorne', role: 'actor', gender: 'male', archetype: 'Method Star', age: 47, fame: 88, bio: 'Stayed in character for the entire shoot of The Cargo Run. Won the Oscar that year. Hasn\'t made eye contact with a journalist since.', trajectory: 0 },
   { name: 'Reese Calloway', role: 'actor', gender: 'male', archetype: 'Box Office Draw', age: 39, fame: 82, bio: 'Romantic leads when he wants them, action when the script\'s right. Charming, profitable, never difficult. Studio favorite.', trajectory: 1 },
   { name: 'Henry Ardent', role: 'actor', gender: 'male', archetype: 'Fading Star', age: 61, fame: 45, bio: 'A leading man in the late 60s. Now does character work and complains about it loudly. Critics still love him. Drinks at lunch.', trajectory: -1 },
-  { name: 'Jude Beauclair', role: 'actor', gender: 'male', archetype: 'Up-and-Comer', age: 26, fame: 38, bio: 'Stage-trained at Juilliard, blew up off a single Sundance picture. Reading every script that comes in. Refuses franchise paper.', trajectory: 1 },
+  { name: 'Jude Beauclair', role: 'actor', gender: 'male', archetype: 'Up-and-Comer', age: 26, fame: 38, bio: 'Stage-trained at Juilliard, blew up off a single New York Film Festival picture. Reading every script that comes in. Refuses franchise paper.', trajectory: 1 },
   { name: 'Forrest McKenna', role: 'actor', gender: 'male', archetype: 'Action Hero', age: 44, fame: 72, bio: 'Does his own stunts. Two broken ribs and counting. The PR fire from his second divorce died down a year ago. Mostly.', trajectory: 0 },
   { name: 'Cole Vance', role: 'actor', gender: 'male', archetype: 'Comedy Icon', age: 51, fame: 79, bio: 'Defined the screwball renaissance of the 70s. Trying to make people take him seriously now. The Oscar campaign is exhausting everyone.', trajectory: 0 },
   { name: 'Sammy Booker', role: 'actor', gender: 'male', archetype: 'Industry Veteran', age: 58, fame: 70, bio: 'Forty years on screen, never the lead. The face you know from a hundred films. Quietly the best-paid character actor in town.', trajectory: 0 },
@@ -3215,7 +3254,7 @@ const CURATED_NPCS = [
   { name: 'Pauline Devereaux', role: 'actor', gender: 'female', archetype: 'Awards Magnet', age: 47, fame: 80, bio: 'Specialty: morally compromised women. Two Oscar nominations playing villains the audience rooted for anyway.', trajectory: 0 },
   { name: 'Geraldine Frost', role: 'actor', gender: 'female', archetype: 'Critics\' Darling', age: 53, fame: 64, bio: 'Played Lady Macbeth twice on Broadway. Plays calculating women on screen. Owns a Greenwich Village bookstore. Sometimes works the register.', trajectory: 0 },
   { name: 'Mildred Beaumont', role: 'actor', gender: 'female', archetype: 'Has-Been', age: 62, fame: 28, bio: 'Was a household name in 1965. Her last great film was 1971. Has been pitching a comeback project to anyone who\'ll listen for ten years.', trajectory: -1 },
-  { name: 'Connie Park', role: 'actor', gender: 'female', archetype: 'Up-and-Comer', age: 24, fame: 32, bio: 'Korean-American, Yale Drama. First film just played Sundance. The William Morris agents are circling. Her parents wanted her to be a doctor.', trajectory: 1 },
+  { name: 'Connie Park', role: 'actor', gender: 'female', archetype: 'Up-and-Comer', age: 24, fame: 32, bio: 'Korean-American, Yale Drama. First film just played the New York Film Festival. The William Morris agents are circling. Her parents wanted her to be a doctor.', trajectory: 1 },
   { name: 'Akiko Nakamura', role: 'actor', gender: 'female', archetype: 'Method Star', age: 30, fame: 48, bio: 'Japanese theater background. Spent a month in silence preparing for her first English-speaking role. Critics noticed.', trajectory: 1 },
   { name: 'Eartha Robinson', role: 'actor', gender: 'female', archetype: 'Comedy Icon', age: 41, fame: 70, bio: 'Stand-up before she was an actress. Still does sets at the Comedy Store on Tuesdays. Studio knows. Studio doesn\'t love it. Studio can\'t stop her.', trajectory: 1 },
   { name: 'Lena Booker', role: 'actor', gender: 'female', archetype: 'Industry Veteran', age: 65, fame: 75, bio: 'Civil rights movement marched her into a film career. Forty years of refusing to play the maid. Has the trophy case to prove it worked.', trajectory: -1 },
@@ -3251,7 +3290,7 @@ const CURATED_NPCS = [
   { name: 'Helena Frost', role: 'director', gender: 'female', archetype: 'Studio Workhorse', age: 44, fame: 58, bio: 'Studio executive turned director. Specializes in finishing other people\'s troubled productions. Three rescues to her credit. Quietly proud.', trajectory: 0 },
   { name: 'Tobias Larch', role: 'director', gender: 'male', archetype: 'Method Star', age: 42, fame: 53, bio: 'One film every five years. Each one a critical event. Each one losing money. Each one mentioned at film school.', trajectory: 0 },
   { name: 'Akira Tanaka', role: 'director', gender: 'male', archetype: 'Critics\' Darling', age: 56, fame: 73, bio: 'Japanese cinema legend whose American debut took eight years to get made. Won the Palme d\'Or. Studio still can\'t pronounce his last film.', trajectory: 0 },
-  { name: 'Hiroshi Park', role: 'director', gender: 'male', archetype: 'Up-and-Comer', age: 31, fame: 42, bio: 'Korean-American film school grad. Three shorts, one Sundance breakout. Studios are circling. He\'s reading every offer carefully.', trajectory: 1 },
+  { name: 'Hiroshi Park', role: 'director', gender: 'male', archetype: 'Up-and-Comer', age: 31, fame: 42, bio: 'Korean-American film school grad. Three shorts, one New York Film Festival breakout. Studios are circling. He\'s reading every offer carefully.', trajectory: 1 },
   { name: 'Carmen Mendoza', role: 'director', gender: 'female', archetype: 'Indie Auteur', age: 40, fame: 48, bio: 'Mexican-American, raised in El Paso. Films about borders, families, water. Three festival prizes. Studios call but she doesn\'t call back.', trajectory: 1 },
   { name: 'James Coleman', role: 'director', gender: 'male', archetype: 'Box Office Draw', age: 45, fame: 76, bio: 'Action-comedy hybrid director. His name on the poster is worth $30M opening weekend. Studios renegotiated his deal twice last year.', trajectory: 1 },
   { name: 'Sara Bellamy', role: 'director', gender: 'female', archetype: 'Awards Magnet', age: 50, fame: 72, bio: 'Wrote ten scripts before she got to direct one. The film won Best Picture. She hasn\'t had to write for hire since.', trajectory: 0 },
@@ -3262,7 +3301,7 @@ const CURATED_NPCS = [
   { name: 'Stanley Whitlock', role: 'director', gender: 'male', archetype: 'Has-Been', age: 58, fame: 25, bio: 'Made one of the best films of 1976. Made one of the worst films of 1981. Hasn\'t directed since. Pitches every Tuesday.', trajectory: -1 },
   { name: 'Ruth Mandelbaum', role: 'director', gender: 'female', archetype: 'Industry Veteran', age: 67, fame: 64, bio: 'Studio editor for fifteen years before she got behind the camera. Cuts her own pictures. Works with the same DP since 1968.', trajectory: -1 },
   { name: 'Forrest Calloway', role: 'director', gender: 'male', archetype: 'Action Hero', age: 47, fame: 68, bio: 'Helicopter pilot in Vietnam. Brings the same precision to set choreography. Studios pair him with stars, get blockbusters, repeat.', trajectory: 0 },
-  { name: 'Gabriela Esposito', role: 'director', gender: 'female', archetype: 'Up-and-Comer', age: 29, fame: 38, bio: 'Just won Sundance with a $400K budget film. Three studios in a bidding war for her next picture. She\'s asking for final cut.', trajectory: 1 },
+  { name: 'Gabriela Esposito', role: 'director', gender: 'female', archetype: 'Up-and-Comer', age: 29, fame: 38, bio: 'Just took the Critics\' Prize at the New York Film Festival with a $400K budget film. Three studios in a bidding war for her next picture. She\'s asking for final cut.', trajectory: 1 },
   { name: 'Marlon Pemberton', role: 'director', gender: 'male', archetype: 'Awards Magnet', age: 56, fame: 82, bio: 'Three Best Director wins. Studios let him do anything. He mostly does small films about marriages. Critics love him. Audiences trust him.', trajectory: 0 },
   { name: 'Sammy Robinson', role: 'director', gender: 'male', archetype: 'Indie Auteur', age: 41, fame: 55, bio: 'Black filmmaker who waited a decade for a green light. Got it on the third try. Used the budget to put eight uncast Black actors on the marquee.', trajectory: 1 },
   { name: 'Diane Sokolov', role: 'director', gender: 'female', archetype: 'Critics\' Darling', age: 47, fame: 62, bio: 'Documentary background. Brings vérité instincts to fiction. Critics call her "the best living American director." Studios call her "expensive."', trajectory: 0 },
@@ -3281,7 +3320,7 @@ const CURATED_NPCS = [
   { name: 'Charles Innes', role: 'director', gender: 'male', archetype: 'Industry Veteran', age: 73, fame: 62, bio: 'Has worked with everyone since John Wayne. Tells stories about every shoot. The young directors gather at the bar after his guest lectures.', trajectory: -1 },
   { name: 'Naomi Park', role: 'director', gender: 'female', archetype: 'Critics\' Darling', age: 36, fame: 53, bio: 'Korean-American, Harvard-educated. Made a sleeper indie about an immigrant family. Critics found it. Awards bodies didn\'t. She\'s working on the next one.', trajectory: 1 },
   { name: 'Frank Whitlock', role: 'director', gender: 'male', archetype: 'Has-Been', age: 56, fame: 30, bio: 'Was on every "promising new director" list in 1976. Disappeared after a public fight with a studio head. Reportedly working on a comeback project.', trajectory: -1 },
-  { name: 'Anna Sinclair', role: 'director', gender: 'female', archetype: 'Method Star', age: 40, fame: 50, bio: 'Lived in a war zone for three months researching her last picture. The film won at Sundance. Her therapist sent flowers.', trajectory: 0 },
+  { name: 'Anna Sinclair', role: 'director', gender: 'female', archetype: 'Method Star', age: 40, fame: 50, bio: 'Lived in a war zone for three months researching her last picture. The film won at Cannes. Her therapist sent flowers.', trajectory: 0 },
   { name: 'Diego Rivera', role: 'director', gender: 'male', archetype: 'Up-and-Comer', age: 33, fame: 47, bio: 'Mexican director who broke through with a Spanish-language film that crossed over. Studios are bidding. He wants creative control.', trajectory: 1 },
   { name: 'Joseph Bonetti', role: 'director', gender: 'male', archetype: 'Comedy Icon', age: 47, fame: 67, bio: 'Studied with Mel Brooks for three years before he ever directed a film. The lessons stuck. Five comedies, four hits.', trajectory: 0 },
   { name: 'Imogen Crewe', role: 'director', gender: 'female', archetype: 'Awards Magnet', age: 45, fame: 76, bio: 'Won Best Director on her third feature. Won it again on her fifth. The Academy is afraid of her. Studios fall over themselves.', trajectory: 0 },
@@ -3366,7 +3405,7 @@ const CURATED_NPCS = [
   { name: 'Frank Sinclair', role: 'producer', gender: 'male', archetype: 'Has-Been', age: 60, fame: 25, bio: 'Was a major studio chief in the 70s. Got pushed out in 1981 over creative differences. Now doing TV movies. Working on a comeback.', trajectory: -1 },
   { name: 'Naomi Mendoza', role: 'producer', gender: 'female', archetype: 'Action Hero', age: 39, fame: 60, bio: 'Producer who specializes in action films with female leads. Three of her last four cleared $40M. Studios are paying attention.', trajectory: 1 },
   { name: 'Edward Wexler', role: 'producer', gender: 'male', archetype: 'Method Star', age: 51, fame: 47, bio: 'Spends three years in development on every project. Four films in fifteen years. Each one a Best Picture nominee.', trajectory: 0 },
-  { name: 'Anna Tanaka', role: 'producer', gender: 'female', archetype: 'Up-and-Comer', age: 31, fame: 38, bio: 'Japanese-American producer. Just shepherded a $300K indie to Sundance victory. Three studios trying to sign her to a first-look deal.', trajectory: 1 },
+  { name: 'Anna Tanaka', role: 'producer', gender: 'female', archetype: 'Up-and-Comer', age: 31, fame: 38, bio: 'Japanese-American producer. Just shepherded a $300K indie to a New York Film Festival showcase. Three studios trying to sign her to a first-look deal.', trajectory: 1 },
   { name: 'Stanley Cabrera', role: 'producer', gender: 'male', archetype: 'Box Office Draw', age: 48, fame: 60, bio: 'Action-comedy hybrid. Produced six films in the early 80s. Five hits. The sixth was so bad they reissued it as a cult comedy.', trajectory: 1 },
   { name: 'Ruby Banks', role: 'producer', gender: 'female', archetype: 'Awards Magnet', age: 52, fame: 65, bio: 'Specializes in dramas about Black families and Black history. Three Oscar wins. The Academy can\'t miss her films.', trajectory: 0 },
   { name: 'Reese Halloran', role: 'producer', gender: 'male', archetype: 'Studio Workhorse', age: 46, fame: 40, bio: 'Eight studio films a year. None famous. None embarrassing. Owns a Hawaiian time-share. Calls it "the math working out."', trajectory: 0 },
@@ -4262,7 +4301,7 @@ function deriveCareerHistory(player) {
 
   // Career start
   milestones.push({
-    year: player.startYear || 1985,
+    year: player.startYear || 1970,
     icon: '🎬',
     title: 'The Career Begins',
     detail: `Started in Hollywood as a young ${ROLE_LABELS[player.startingRole || 'actor'].toLowerCase()}.`,
@@ -4312,7 +4351,7 @@ function deriveCareerHistory(player) {
       year: firstHit.releaseYear || firstHit.year,
       icon: '💥',
       title: 'First Hit',
-      detail: `"${firstHit.title}" grossed ${fmtMoney(firstHit.result.boxOffice)}.`,
+      detail: `"${firstHit.title}" grossed ${fmtMoneyYear(firstHit.result.boxOffice, firstHit.releaseYear || firstHit.year)}.`,
     });
   }
 
@@ -4323,7 +4362,7 @@ function deriveCareerHistory(player) {
       year: firstFlop.releaseYear || firstFlop.year,
       icon: '💀',
       title: 'First Bomb',
-      detail: `"${firstFlop.title}" lost ${fmtMoney(Math.abs(firstFlop.result.profit))}.`,
+      detail: `"${firstFlop.title}" lost ${fmtMoneyYear(Math.abs(firstFlop.result.profit), firstFlop.releaseYear || firstFlop.year)}.`,
     });
   }
 
@@ -4472,22 +4511,25 @@ function deriveCareerHistory(player) {
     });
   }
 
-  // Box office milestones — first $20M / $50M / $100M / $200M film
-  // Boxoffice thresholds appropriate to 1985 (a $20M opening would have been huge)
+  // Box office milestones — thresholds stored in 1985-base dollars, displayed
+  // in the dollars of the year the milestone was actually hit. So a 1972 film
+  // crossing the $20M-base threshold shows up as "First $7M Picture" and a
+  // 2010 film at the $200M-base threshold shows up as "Crossed $408M".
   const boxOfficeThresholds = [
-    { min: 20_000_000, icon: '💰', title: 'First $20M Picture' },
-    { min: 50_000_000, icon: '💰', title: 'First $50M Picture' },
-    { min: 100_000_000, icon: '💎', title: 'Crossed $100M' },
-    { min: 200_000_000, icon: '👑', title: 'Crossed $200M' },
+    { min: 20_000_000, icon: '💰', label: 'First' },
+    { min: 50_000_000, icon: '💰', label: 'First' },
+    { min: 100_000_000, icon: '💎', label: 'Crossed' },
+    { min: 200_000_000, icon: '👑', label: 'Crossed' },
   ];
   for (const threshold of boxOfficeThresholds) {
     const first = filmsByYear.find(f => (f.result?.boxOffice || 0) >= threshold.min);
     if (first) {
+      const yr = first.releaseYear || first.year;
       milestones.push({
-        year: first.releaseYear || first.year,
+        year: yr,
         icon: threshold.icon,
-        title: threshold.title,
-        detail: `"${first.title}" grossed ${fmtMoney(first.result.boxOffice)}.`,
+        title: `${threshold.label} ${fmtMoneyYear(threshold.min, yr)}${threshold.label === 'First' ? ' Picture' : ''}`,
+        detail: `"${first.title}" grossed ${fmtMoneyYear(first.result.boxOffice, yr)}.`,
       });
     }
   }
@@ -4696,7 +4738,7 @@ function deriveCareerHistory(player) {
     addToYear(c.born, { type: 'personal', label: `👶 ${c.name} was born` });
   }
   // Career start
-  addToYear(player.startYear || 1985, { type: 'start', label: `🎬 Career begins as ${ROLE_LABELS[player.startingRole || 'actor']}` });
+  addToYear(player.startYear || 1970, { type: 'start', label: `🎬 Career begins as ${ROLE_LABELS[player.startingRole || 'actor']}` });
 
   const timeline = Object.keys(yearMap)
     .map(y => parseInt(y, 10))
@@ -4705,7 +4747,7 @@ function deriveCareerHistory(player) {
 
   // ===== SUMMARY NUMBERS =====
   const summary = {
-    yearsActive: (player.year - (player.startYear || 1985)) + 1,
+    yearsActive: (player.year - (player.startYear || 1970)) + 1,
     totalFilms: history.length,
     totalBoxOffice: history.reduce((s, f) => s + (f.result?.boxOffice || 0), 0),
     lifetimeEarnings: player.lifetimeEarnings || 0,
@@ -6039,9 +6081,10 @@ function StartScreen({ onStart, inheritedWorld }) {
 
       <Panel subtitle="The Pitch">
         <p style={{ lineHeight: 1.6 }}>
-          The year is <strong style={{ color: 'var(--gold)' }}>1985</strong>. The studios are hungry,
-          the marquees are bright, and somewhere out there a young {role ? ROLE_LABELS[role].toLowerCase() : 'hopeful'} is
-          waiting for their break. Build skills. Take roles. Make pictures.
+          The year is <strong style={{ color: 'var(--gold)' }}>1970</strong>. New Hollywood is in full bloom —
+          the old studio system is collapsing, the auteurs are taking over, and a young
+          {role ? ` ${ROLE_LABELS[role].toLowerCase()}` : ' hopeful'} with the right instincts can build
+          something that lasts forty years. Build skills. Take roles. Make pictures.
           If you're good — and a little lucky — you might one day open the doors to your own studio.
         </p>
         <p style={{ lineHeight: 1.6 }} className="ht-text-dim">
@@ -6153,10 +6196,10 @@ function StatsBar({ player }) {
       </div>
       <div className="ht-stat">
         <div className="ht-stat-label">Cash</div>
-        <div className="ht-stat-value">{fmtMoney(player.cash)}</div>
+        <div className="ht-stat-value">{fmtMoneyYear(player.cash, player.year)}</div>
         {upkeep > 0 && (
           <div style={{ fontFamily: "'Special Elite', monospace", fontSize: '0.65rem', color: 'var(--red-bright)', marginTop: 2 }}>
-            -{fmtMoney(upkeep)}/wk
+            -{fmtMoneyYear(upkeep, player.year)}/wk
           </div>
         )}
       </div>
@@ -6295,7 +6338,7 @@ function FirstLookPanel({ player, onDevelop, onPass }) {
                 {pitch.premise}
               </div>
               <div className="ht-text-dim" style={{ fontSize: '0.78rem', marginBottom: 8 }}>
-                Suggested budget: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(pitch.suggestedBudget)}</strong>
+                Suggested budget: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(pitch.suggestedBudget, player.year)}</strong>
               </div>
               <div className="ht-row" style={{ gap: 6 }}>
                 <button className="ht-btn ht-btn-sm ht-btn-primary" onClick={() => onDevelop(pitch)}>
@@ -6317,7 +6360,7 @@ function FirstLookPanel({ player, onDevelop, onPass }) {
           {deals.map(d => (
             <div key={d.id} style={{ padding: '6px 10px', borderBottom: '1px dashed var(--border)', fontSize: '0.85rem' }}>
               <span><strong>{d.npcName}</strong></span>
-              <span className="ht-text-dim"> · expires {d.expiresYear} · paid {fmtMoney(d.totalPaid || d.retainerPaid)}</span>
+              <span className="ht-text-dim"> · expires {d.expiresYear} · paid {fmtMoneyYear(d.totalPaid || d.retainerPaid, player.year)}</span>
             </div>
           ))}
         </>
@@ -6385,8 +6428,8 @@ function CoProducingPanel({ player, onAccept, onDecline }) {
                 <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(0,0,0,0.3)', fontSize: '0.82rem' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
                     <div><span className="ht-text-dim">Director:</span> {offer.directorName}</div>
-                    <div><span className="ht-text-dim">Total budget:</span> {fmtMoney(offer.budget)}</div>
-                    <div><span className="ht-text-dim">Your commitment:</span> <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(offer.commitment)}</strong></div>
+                    <div><span className="ht-text-dim">Total budget:</span> {fmtMoneyYear(offer.budget, player.year)}</div>
+                    <div><span className="ht-text-dim">Your commitment:</span> <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(offer.commitment, player.year)}</strong></div>
                     <div><span className="ht-text-dim">Your share:</span> {Math.round(offer.profitSharePct * 100)}%</div>
                   </div>
                 </div>
@@ -6396,7 +6439,7 @@ function CoProducingPanel({ player, onAccept, onDecline }) {
                     disabled={player.cash < offer.commitment}
                     onClick={() => onAccept(offer)}
                   >
-                    Commit {fmtMoney(offer.commitment)}
+                    Commit {fmtMoneyYear(offer.commitment, player.year)}
                   </button>
                   <button className="ht-btn ht-btn-sm" onClick={() => onDecline(offer)}>
                     Pass
@@ -6426,7 +6469,7 @@ function CoProducingPanel({ player, onAccept, onDecline }) {
                   <span className="ht-text-dim"> · {cp.studio} · directed by {cp.directorName}</span>
                 </div>
                 <div className="ht-text-dim" style={{ fontSize: '0.78rem' }}>
-                  Committed: {fmtMoney(cp.commitment)} · Releases in ~{Math.max(0, weeksToRelease)} weeks
+                  Committed: {fmtMoneyYear(cp.commitment, player.year)} · Releases in ~{Math.max(0, weeksToRelease)} weeks
                 </div>
               </div>
             );
@@ -6445,7 +6488,7 @@ function CoProducingPanel({ player, onAccept, onDecline }) {
                 <span className="ht-text-dim"> · {h.settledYear}</span>
               </span>
               <span style={{ color: h.profit > 0 ? '#6fcc4c' : h.profit < 0 ? 'var(--red-bright)' : 'var(--cream-dim)', fontWeight: 700 }}>
-                {h.profit > 0 ? '+' : ''}{fmtMoney(h.profit)}
+                {h.profit > 0 ? '+' : ''}{fmtMoneyYear(h.profit, h.settledYear || player.year)}
               </span>
             </div>
           ))}
@@ -6551,7 +6594,11 @@ function ReservesPanel({ player, onDeposit, onWithdraw, productionActive }) {
   const [amount, setAmount] = useState('');
   const reserves = player.studio?.reserves || 0;
   const cash = player.cash;
-  const parsed = parseInt(amount.replace(/[^\d]/g, ''), 10) || 0;
+  // The input field holds display-year dollars; convert to base 1985 dollars
+  // before calling deposit/withdraw handlers (which operate on base amounts).
+  const factor = inflationFactor(player.year);
+  const parsedDisplay = parseInt(amount.replace(/[^\d]/g, ''), 10) || 0;
+  const parsed = factor > 0 ? Math.round(parsedDisplay / factor) : parsedDisplay;
 
   // Quick-amount presets — picked from sane fractions of available cash/reserves
   const depositPresets = [
@@ -6586,17 +6633,17 @@ function ReservesPanel({ player, onDeposit, onWithdraw, productionActive }) {
         <div style={{ padding: '10px 12px', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border)' }}>
           <div className="ht-text-dim" style={{ fontSize: '0.78rem', letterSpacing: '0.05em' }}>PERSONAL CASH</div>
           <div style={{ fontFamily: "'Playfair Display', serif", fontWeight: 700, color: 'var(--gold-bright)', fontSize: '1.2rem' }}>
-            {fmtMoney(cash)}
+            {fmtMoneyYear(cash, player.year)}
           </div>
         </div>
         <div style={{ padding: '10px 12px', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--gold-bright)', borderLeft: '3px solid var(--gold-bright)' }}>
           <div className="ht-text-dim" style={{ fontSize: '0.78rem', letterSpacing: '0.05em' }}>STUDIO RESERVES</div>
           <div style={{ fontFamily: "'Playfair Display', serif", fontWeight: 700, color: 'var(--gold-bright)', fontSize: '1.2rem' }}>
-            {fmtMoney(reserves)}
+            {fmtMoneyYear(reserves, player.year)}
           </div>
           {annualInterest > 0 && (
             <div className="ht-text-dim" style={{ fontSize: '0.75rem', marginTop: 2 }}>
-              ≈ {fmtMoney(annualInterest)}/yr
+              ≈ {fmtMoneyYear(annualInterest, player.year)}/yr
             </div>
           )}
         </div>
@@ -6616,10 +6663,10 @@ function ReservesPanel({ player, onDeposit, onWithdraw, productionActive }) {
             <button
               key={v}
               className="ht-btn ht-btn-sm"
-              onClick={() => setAmount(String(v))}
+              onClick={() => setAmount(String(Math.round(v * factor)))}
               style={{ padding: '3px 8px', fontSize: '0.78rem' }}
             >
-              {fmtMoney(v)}
+              {fmtMoneyYear(v, player.year)}
             </button>
           ))}
         </div>
@@ -6949,7 +6996,7 @@ function ProjectBuilder({ player, offer, sequelOf, onCancel, onProduce }) {
 
         <div className="ht-field">
           <label className="ht-label">
-            Production Budget: <span style={{ color: 'var(--gold-bright)' }}>{fmtMoney(budget)}</span>
+            Production Budget: <span style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(budget, player.year)}</span>
             {!editable && <span className="ht-text-dim"> (set by studio)</span>}
           </label>
           {editable && (() => {
@@ -6981,7 +7028,7 @@ function ProjectBuilder({ player, offer, sequelOf, onCancel, onProduce }) {
 
         <div className="ht-field">
           <label className="ht-label">
-            Marketing Budget: <span style={{ color: 'var(--gold-bright)' }}>{fmtMoney(playerControlsMarketing ? marketing : plannedMarketing)}</span>
+            Marketing Budget: <span style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(playerControlsMarketing ? marketing : plannedMarketing, player.year)}</span>
             {!playerControlsMarketing && <span className="ht-text-dim"> (the producer decides — but you can boost it later)</span>}
           </label>
           {playerControlsMarketing ? (
@@ -7251,13 +7298,13 @@ function ProjectBuilder({ player, offer, sequelOf, onCancel, onProduce }) {
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="ht-label">Cost to You:</span>
           <span style={{ color: canAfford ? 'var(--gold-bright)' : 'var(--red-bright)', fontWeight: 700 }}>
-            {fmtMoney(studioCost)}
+            {fmtMoneyYear(studioCost, player.year)}
           </span>
         </div>
         {offer && (
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
             <span className="ht-label">Your Pay (on release):</span>
-            <span style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoney(offer.pay)}</span>
+            <span style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoneyYear(offer.pay, player.year)}</span>
           </div>
         )}
 
@@ -7400,9 +7447,9 @@ function ResultModal({ result, project, onClose }) {
 
         <div className="ht-box-office">
           <div className="ht-box-office-label">Opening to Final Gross</div>
-          <div className="ht-box-office-num">{fmtMoney(boxOffice)}</div>
+          <div className="ht-box-office-num">{fmtMoneyYear(boxOffice, player.year)}</div>
           <div className="ht-text-dim" style={{ marginTop: 4 }}>
-            Cost: {fmtMoney(totalCost)} · Profit: <span style={{ color: profit > 0 ? '#6fcc4c' : 'var(--red-bright)' }}>{fmtMoney(profit)}</span>
+            Cost: {fmtMoneyYear(totalCost, player.year)} · Profit: <span style={{ color: profit > 0 ? '#6fcc4c' : 'var(--red-bright)' }}>{fmtMoneyYear(profit, player.year)}</span>
           </div>
         </div>
 
@@ -7502,7 +7549,7 @@ function AuditionResultModal({ data, onAccept, onClose }) {
 // A vintage-feel chart of a film's weekly run.
 // We draw bars for each week's gross and overlay a line for cumulative total.
 
-function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = false, totalWeeks }) {
+function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = false, totalWeeks, year }) {
   if (!run || run.length === 0) return null;
 
   const playedWeeks = run.length;
@@ -7530,7 +7577,7 @@ function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = 
     const val = maxWeekly * (1 - i / ticks);
     return {
       y: padT + (i / ticks) * barAreaH,
-      label: fmtMoney(val).replace('$', ''),
+      label: fmtMoneyYear(val, year).replace('$', ''),
     };
   });
 
@@ -7618,7 +7665,7 @@ function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = 
                   fontSize="9"
                   fontFamily="'Special Elite', monospace"
                 >
-                  {fmtMoney(w.gross).replace('$', '')}
+                  {fmtMoneyYear(w.gross, year).replace('$', '')}
                 </text>
               )}
             </g>
@@ -7696,7 +7743,7 @@ function OpeningWeekendModal({ data, onClose }) {
 
         <div className="ht-box-office">
           <div className="ht-box-office-label">Opening Weekend Gross</div>
-          <div className="ht-box-office-num">{fmtMoney(openingGross)}</div>
+          <div className="ht-box-office-num">{fmtMoneyYear(openingGross, film.releaseYear || film.year)}</div>
           <div className="ht-text-dim" style={{ marginTop: 6, fontSize: '0.85rem' }}>
             {projectionText}
           </div>
@@ -7780,6 +7827,7 @@ function FilmChartModal({ film, player, onReRelease, onClose }) {
           <BoxOfficeChart
             run={film.isOpen ? film.run.slice(0, film.currentWeekInRun) : film.run}
             projected={false}
+            year={film.releaseYear || film.year || player?.year}
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginTop: 4, color: 'var(--cream-dim)', fontFamily: "'Special Elite', monospace" }}>
             <span>BARS: weekly gross</span>
@@ -7790,12 +7838,12 @@ function FilmChartModal({ film, player, onReRelease, onClose }) {
         <div className="ht-score-row" style={{ marginTop: 12 }}>
           <div className="ht-score-box">
             <div className="ht-score-label">{film.isOpen ? 'Gross So Far' : 'Final Gross'}</div>
-            <div className="ht-score-num hi" style={{ fontSize: '1.6rem' }}>{fmtMoney(totalBox)}</div>
+            <div className="ht-score-num hi" style={{ fontSize: '1.6rem' }}>{fmtMoneyYear(totalBox, film.releaseYear || film.year)}</div>
           </div>
           <div className="ht-score-box">
             <div className="ht-score-label">Profit</div>
             <div className="ht-score-num" style={{ color: profit > 0 ? '#6fcc4c' : 'var(--red-bright)', fontSize: '1.6rem' }}>
-              {fmtMoney(profit)}
+              {fmtMoneyYear(profit, player.year)}
             </div>
           </div>
         </div>
@@ -7806,10 +7854,10 @@ function FilmChartModal({ film, player, onReRelease, onClose }) {
           ) : (
             <p>Closed after {film.run.length} weeks in theaters.</p>
           )}
-          <p>Critics: <strong style={{ color: 'var(--gold-bright)' }}>{film.result.criticScore}</strong> · Audience: <strong style={{ color: 'var(--gold-bright)' }}>{film.result.audienceScore}</strong> · Budget: {fmtMoney(film.budget)} · Marketing: {fmtMoney(film.marketing)}</p>
+          <p>Critics: <strong style={{ color: 'var(--gold-bright)' }}>{film.result.criticScore}</strong> · Audience: <strong style={{ color: 'var(--gold-bright)' }}>{film.result.audienceScore}</strong> · Budget: {fmtMoneyYear(film.budget, film.releaseYear || film.year)} · Marketing: {fmtMoneyYear(film.marketing, film.releaseYear || film.year)}</p>
           {alreadyReReleased && (
             <p style={{ color: 'var(--gold-bright)', marginTop: 6, fontStyle: 'italic' }}>
-              ★ Director's Cut re-released in {film.directorsCut.year} — added {fmtMoney(film.directorsCut.bump)} to the gross.
+              ★ Director's Cut re-released in {film.directorsCut.year} — added {fmtMoneyYear(film.directorsCut.bump, film.directorsCut.year)} to the gross.
             </p>
           )}
         </div>
@@ -7821,14 +7869,14 @@ function FilmChartModal({ film, player, onReRelease, onClose }) {
               ✦ Re-Release as Director's Cut
             </div>
             <p style={{ fontSize: '0.85rem', margin: '0 0 8px' }}>
-              Recut, remastered, and put back into limited theaters for a few weeks. Costs {fmtMoney(reReleaseCost)} and 4 weeks of your time. Expected box office bump: ~{fmtMoney(projectedBump)}, with a small fame and reputation boost.
+              Recut, remastered, and put back into limited theaters for a few weeks. Costs {fmtMoneyYear(reReleaseCost, player.year)} and 4 weeks of your time. Expected box office bump: ~{fmtMoney(projectedBump)}, with a small fame and reputation boost.
             </p>
             <button
               className="ht-btn ht-btn-sm ht-btn-primary"
               disabled={!player || player.cash < reReleaseCost}
               onClick={() => onReRelease(film)}
             >
-              Begin Re-Release · {fmtMoney(reReleaseCost)}
+              Begin Re-Release · {fmtMoneyYear(reReleaseCost, player.year)}
             </button>
             {player && player.cash < reReleaseCost && (
               <span className="ht-text-dim" style={{ fontSize: '0.8rem', marginLeft: 10 }}>(insufficient cash)</span>
@@ -8553,12 +8601,12 @@ function ProductionHUD({ production }) {
               </span>
             )}
           </div>
-          <div className="ht-text-dim" style={{ fontSize: '0.85rem' }}>A {proj.genre} picture · Budget {fmtMoney(proj.budget)}</div>
+          <div className="ht-text-dim" style={{ fontSize: '0.85rem' }}>A {proj.genre} picture · Budget {fmtMoneyYear(proj.budget, player.year)}</div>
         </div>
         <div style={{ fontFamily: "'Special Elite', monospace", fontSize: '0.75rem', color: 'var(--cream-dim)' }}>
           <Tooltip text="Quality modifier from your production decisions so far. Affects final critic + audience scores. Range typically -15 to +15.">QUAL MOD</Tooltip>: <span style={{ color: mods.qualityMod >= 0 ? '#6fcc4c' : 'var(--red-bright)' }}>{mods.qualityMod >= 0 ? '+' : ''}{mods.qualityMod}</span>
           {' · '}<Tooltip text="Marketing effectiveness multiplier. Press tours, magazine covers, and festivals boost this. Bad PR drops it.">MKT</Tooltip>: <span style={{ color: mods.marketingMod >= 1 ? '#6fcc4c' : mods.marketingMod < 1 ? 'var(--red-bright)' : 'var(--cream)' }}>×{mods.marketingMod.toFixed(2)}</span>
-          {' · '}<Tooltip text="Cost overruns from filming events. Comes out of profit at release. Doubled if film is in production hell.">OVER</Tooltip>: <span style={{ color: mods.costOverrun > 0 ? 'var(--red-bright)' : 'var(--cream)' }}>{fmtMoney(mods.costOverrun)}</span>
+          {' · '}<Tooltip text="Cost overruns from filming events. Comes out of profit at release. Doubled if film is in production hell.">OVER</Tooltip>: <span style={{ color: mods.costOverrun > 0 ? 'var(--red-bright)' : 'var(--cream)' }}>{fmtMoneyYear(mods.costOverrun, player.year)}</span>
         </div>
       </div>
       {production.productionHell && (
@@ -9076,7 +9124,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
           <div className="ht-phase-block-title">💰 Marketing Budget</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span>Current spend:</span>
-            <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(proj.marketing + (mkt.budgetBoost || 0))}</strong>
+            <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(proj.marketing + (mkt.budgetBoost || 0), player.year)}</strong>
           </div>
           {controlsMoney ? (
             <>
@@ -9089,7 +9137,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
                     disabled={player.cash < amt}
                     onClick={() => boostBudget(amt)}
                   >
-                    +{fmtMoney(amt)}
+                    +{fmtMoneyYear(amt, player.year)}
                   </button>
                 ))}
               </div>
@@ -9115,7 +9163,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
                   </div>
                   <div className="ht-text-dim" style={{ fontSize: '0.8rem' }}>
                     For: {ev.who.map(r => ROLE_LABELS[r]).join('/')}
-                    {ev.cost > 0 && ` · ${fmtMoney(ev.cost)}`}
+                    {ev.cost > 0 && ` · ${fmtMoneyYear(ev.cost, player.year)}`}
                     {' · +'}{Math.round(ev.mktBoost * 100)}% reach
                   </div>
                 </div>
@@ -9178,7 +9226,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
                         </div>
                         <div style={{ fontSize: '0.78rem', marginTop: 3 }}>
                           <span className="ht-text-dim">Entry: </span>
-                          <strong>{fmtMoney(fest.entryFee)}</strong>
+                          <strong>{fmtMoneyYear(fest.entryFee, player.year)}</strong>
                           <span className="ht-text-dim"> · Acceptance: </span>
                           <strong style={{ color: chanceColor }}>~{chancePct}%</strong>
                           <span className="ht-text-dim"> · On accept: +{fest.criticBoost} critics, -{fest.audienceCost} audience</span>
@@ -9198,7 +9246,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
                           });
                         }}
                       >
-                        Submit · {fmtMoney(fest.entryFee)}
+                        Submit · {fmtMoneyYear(fest.entryFee, player.year)}
                       </button>
                     </div>
                   );
@@ -9247,7 +9295,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
               <p style={{ fontSize: '0.9rem' }}>
                 A serious FYC campaign — trade-paper ads, screener mailings, panel events — can put this picture in awards conversation.
                 Dramas and prestige genres benefit most. {(mkt.fycSpend || 0) > 0 && (
-                  <strong style={{ color: 'var(--gold-bright)' }}> Current: {fmtMoney(mkt.fycSpend || 0)}.</strong>
+                  <strong style={{ color: 'var(--gold-bright)' }}> Current: {fmtMoneyYear(mkt.fycSpend || 0, player.year)}.</strong>
                 )}
               </p>
               <div className="ht-row">
@@ -9258,7 +9306,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
                     disabled={player.cash < amt}
                     onClick={() => onChoice({ fycSpend: amt, cashSpent: amt })}
                   >
-                    +{fmtMoney(amt)} FYC
+                    +{fmtMoneyYear(amt, player.year)} FYC
                   </button>
                 ))}
               </div>
@@ -9266,7 +9314,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
           ) : (
             <p className="ht-text-dim" style={{ fontSize: '0.9rem' }}>
               The producer decides whether to mount an awards campaign. {(mkt.fycSpend || 0) > 0 && (
-                <em>Word is they're spending {fmtMoney(mkt.fycSpend || 0)} on FYC.</em>
+                <em>Word is they're spending {fmtMoneyYear(mkt.fycSpend || 0, player.year)} on FYC.</em>
               )}
             </p>
           )}
@@ -9314,7 +9362,7 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
 function CareerCharts({ player, onClose }) {
   // Build datasets from history
   const history = player.history || [];
-  const startYear = player.startYear || 1985;
+  const startYear = player.startYear || 1970;
   const endYear = player.year;
 
   // ----- DATA: Fame trajectory (estimated from film releases + current) -----
@@ -9502,10 +9550,10 @@ function CareerCharts({ player, onClose }) {
             <div style={{ marginTop: 18 }}>
               <div className="ht-label" style={{ marginBottom: 6 }}>★ Lifetime Earnings (cumulative)</div>
               <p className="ht-text-dim" style={{ fontSize: '0.82rem', margin: '0 0 8px' }}>
-                Total earned across the career: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(finalTotal)}</strong>.
+                Total earned across the career: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(finalTotal, player.year)}</strong>.
               </p>
               <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', border: '1px solid var(--border)' }}>
-                {renderLineChart(earningsSeries, p => p.total, Math.max(1_000_000, finalTotal), (t) => fmtMoney(t).replace(/\.0$/, ''), '#d4a64a')}
+                {renderLineChart(earningsSeries, p => p.total, Math.max(1_000_000, finalTotal), (t) => fmtMoneyYear(t, player.year).replace(/\.0$/, ''), '#d4a64a')}
               </div>
             </div>
 
@@ -9622,7 +9670,7 @@ function CareerHistory({ player, onClose }) {
     <div className="ht-fade-in">
       <Panel
         title={`${player.name} — A Hollywood Life`}
-        subtitle={`Started ${player.startYear || 1985} as ${ROLE_LABELS[player.startingRole || 'actor']} · Best known as a ${primaryRoleLabel}`}
+        subtitle={`Started ${player.startYear || 1970} as ${ROLE_LABELS[player.startingRole || 'actor']} · Best known as a ${primaryRoleLabel}`}
       >
         {/* Headline numbers */}
         <div className="ht-summary-grid">
@@ -9635,11 +9683,11 @@ function CareerHistory({ player, onClose }) {
             <div className="ht-summary-label">Films</div>
           </div>
           <div className="ht-summary-stat">
-            <div className="ht-summary-num">{fmtMoney(summary.totalBoxOffice)}</div>
+            <div className="ht-summary-num">{fmtMoneyYear(summary.totalBoxOffice, player.year)}</div>
             <div className="ht-summary-label">Total Box Office</div>
           </div>
           <div className="ht-summary-stat">
-            <div className="ht-summary-num">{fmtMoney(summary.lifetimeEarnings)}</div>
+            <div className="ht-summary-num">{fmtMoneyYear(summary.lifetimeEarnings, player.year)}</div>
             <div className="ht-summary-label">Lifetime Earnings</div>
           </div>
           <div className="ht-summary-stat">
@@ -9692,7 +9740,7 @@ function CareerHistory({ player, onClose }) {
                   <div className="ht-record">
                     <span className="ht-record-label">💰 Highest Grossing</span>
                     <span className="ht-record-value">
-                      "{records.highestGrossing.title}" — {fmtMoney(records.highestGrossing.result.boxOffice)}
+                      "{records.highestGrossing.title}" — {fmtMoneyYear(records.highestGrossing.result.boxOffice, records.highestGrossing.releaseYear || records.highestGrossing.year)}
                     </span>
                   </div>
                 )}
@@ -9700,7 +9748,7 @@ function CareerHistory({ player, onClose }) {
                   <div className="ht-record">
                     <span className="ht-record-label">📈 Biggest Profit</span>
                     <span className="ht-record-value">
-                      "{records.biggestProfit.title}" — {fmtMoney(records.biggestProfit.result.profit)}
+                      "{records.biggestProfit.title}" — {fmtMoneyYear(records.biggestProfit.result.profit, records.biggestProfit.releaseYear || records.biggestProfit.year)}
                     </span>
                   </div>
                 )}
@@ -9724,7 +9772,7 @@ function CareerHistory({ player, onClose }) {
                   <div className="ht-record">
                     <span className="ht-record-label">💀 Biggest Bomb</span>
                     <span className="ht-record-value" style={{ color: 'var(--red-bright)' }}>
-                      "{records.biggestFlop.title}" — {fmtMoney(records.biggestFlop.result.profit)}
+                      "{records.biggestFlop.title}" — {fmtMoneyYear(records.biggestFlop.result.profit, records.biggestFlop.releaseYear || records.biggestFlop.year)}
                     </span>
                   </div>
                 )}
@@ -9753,7 +9801,7 @@ function CareerHistory({ player, onClose }) {
                         As {ROLE_LABELS[r]}
                       </span>
                       <span className="ht-text-dim" style={{ fontSize: '0.85rem' }}>
-                        {stats.count} film{stats.count === 1 ? '' : 's'} · {fmtMoney(stats.totalBox)}
+                        {stats.count} film{stats.count === 1 ? '' : 's'} · {fmtMoneyYear(stats.totalBox, player.year)}
                       </span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 8, marginTop: 10, fontSize: '0.88rem' }}>
@@ -9911,7 +9959,7 @@ function Boulevard({ player, onBuy, onSell, onIndulgence, onClose }) {
     else if (outgrown) lockReason = 'You\'ve outgrown this';
     else if (!studioOk) lockReason = 'Studio required';
     else if (!fameOk) lockReason = `Need fame ${item.fameRequired}`;
-    else if (!afford) lockReason = `Costs ${fmtMoney(item.price)}`;
+    else if (!afford) lockReason = `Costs ${fmtMoneyYear(item.price, player.year)}`;
 
     return (
       <div key={item.id} className="ht-shop-item" style={own ? { borderColor: 'var(--gold-bright)' } : {}}>
@@ -9923,15 +9971,15 @@ function Boulevard({ player, onBuy, onSell, onIndulgence, onClose }) {
             <div className="ht-text-dim" style={{ fontSize: '0.85rem' }}>{item.flavor}</div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoney(item.price)}</div>
+            <div style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoneyYear(item.price, player.year)}</div>
             {item.weeklyUpkeep > 0 && (
-              <div className="ht-text-dim" style={{ fontSize: '0.75rem' }}>+{fmtMoney(item.weeklyUpkeep)}/wk upkeep</div>
+              <div className="ht-text-dim" style={{ fontSize: '0.75rem' }}>+{fmtMoneyYear(item.weeklyUpkeep, player.year)}/wk upkeep</div>
             )}
           </div>
         </div>
 
         <div style={{ marginTop: 6, fontSize: '0.82rem' }}>
-          {renderEffects(item.effects)}
+          {renderEffects(item.effects, player.year)}
         </div>
 
         <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -9939,7 +9987,7 @@ function Boulevard({ player, onBuy, onSell, onIndulgence, onClose }) {
             <button className="ht-btn ht-btn-sm ht-btn-danger" onClick={() => onSell(item)}>Sell</button>
           ) : (
             <button className="ht-btn ht-btn-sm ht-btn-primary" disabled={!buyable} onClick={() => onBuy(item)}>
-              {buyable ? `Buy · ${fmtMoney(item.price)}` : lockReason}
+              {buyable ? `Buy · ${fmtMoneyYear(item.price, player.year)}` : lockReason}
             </button>
           )}
         </div>
@@ -9951,7 +9999,7 @@ function Boulevard({ player, onBuy, onSell, onIndulgence, onClose }) {
     <div className="ht-fade-in">
       <Panel
         title="The Boulevard"
-        subtitle={`Cash: ${fmtMoney(cash)} · Weekly upkeep: ${fmtMoney(upkeep)}`}
+        subtitle={`Cash: ${fmtMoneyYear(cash, player.year)} · Weekly upkeep: ${fmtMoneyYear(upkeep, player.year)}`}
       >
         <div className="ht-tabs">
           <button className={`ht-tab ${tab === 'lifestyle' ? 'active' : ''}`} onClick={() => setTab('lifestyle')}>🏛 Lifestyle</button>
@@ -10004,7 +10052,7 @@ function Boulevard({ player, onBuy, onSell, onIndulgence, onClose }) {
   );
 }
 
-function renderEffects(effects) {
+function renderEffects(effects, year) {
   if (!effects) return null;
   const parts = [];
   if (effects.fameWeekly) parts.push(`+${effects.fameWeekly.toFixed(2)} fame/week`);
@@ -10015,7 +10063,7 @@ function renderEffects(effects) {
   if (effects.promoFameMultiplier) parts.push(`${effects.promoFameMultiplier}× promo fame`);
   if (effects.passiveSkill) parts.push(`Passive ${ROLE_LABELS[effects.passiveSkill]} skill growth`);
   if (effects.fycMultiplier) parts.push(`${effects.fycMultiplier}× FYC effectiveness`);
-  if (effects.studioBudgetCap) parts.push(`Studio budget cap: ${fmtMoney(effects.studioBudgetCap)}`);
+  if (effects.studioBudgetCap) parts.push(`Studio budget cap: ${fmtMoneyYear(effects.studioBudgetCap, year)}`);
   if (effects.costOverrunReduction) parts.push(`${Math.round(effects.costOverrunReduction * 100)}% less cost overruns`);
   if (effects.freeScriptPolish) parts.push(`Automatic script polish on your pictures`);
   if (effects.npcSkillBonus) parts.push(`+${effects.npcSkillBonus} skill to NPC crew on your pictures`);
@@ -10064,7 +10112,7 @@ function Indulgences({ player, onIndulgence }) {
       {INDULGENCES.map(item => {
         const can = player.cash >= item.price && player.fame >= (item.fameRequired || 0);
         const lockReason = player.cash < item.price
-          ? `Need ${fmtMoney(item.price)}`
+          ? `Need ${fmtMoneyYear(item.price, player.year)}`
           : player.fame < (item.fameRequired || 0)
             ? `Need fame ${item.fameRequired}`
             : '';
@@ -10077,7 +10125,7 @@ function Indulgences({ player, onIndulgence }) {
                 </div>
                 <div className="ht-text-dim" style={{ fontSize: '0.85rem' }}>{item.flavor}</div>
               </div>
-              <div style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoney(item.price)}</div>
+              <div style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>{fmtMoneyYear(item.price, player.year)}</div>
             </div>
             <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
               <button className="ht-btn ht-btn-sm" disabled={!can} onClick={() => onIndulgence(item)}>
@@ -10148,7 +10196,7 @@ function FranchisesView({ player, onMakeSequel, onAcceptSale, onDeclineSale, onC
                     <span className="ht-text-dim" style={{ fontSize: '0.78rem' }}>{weeksLeft}w left</span>
                   </div>
                   <div style={{ marginTop: 6, fontFamily: "'Playfair Display', serif", fontWeight: 700, fontSize: '1.4rem', color: 'var(--gold-bright)' }}>
-                    {fmtMoney(offer.amount)}
+                    {fmtMoneyYear(offer.amount, player.year)}
                   </div>
                   <div className="ht-text-dim" style={{ fontSize: '0.78rem', marginTop: 2 }}>
                     {offer.entries} {offer.entries === 1 ? 'entry' : 'entries'} · {offer.hits} hit{offer.hits === 1 ? '' : 's'} · dormant {offer.yearsDormant} years
@@ -10158,7 +10206,7 @@ function FranchisesView({ player, onMakeSequel, onAcceptSale, onDeclineSale, onC
                       className="ht-btn ht-btn-sm ht-btn-primary"
                       onClick={() => onAcceptSale(offer)}
                     >
-                      Sell ({fmtMoney(offer.amount)})
+                      Sell ({fmtMoneyYear(offer.amount, player.year)})
                     </button>
                     <button
                       className="ht-btn ht-btn-sm"
@@ -10270,7 +10318,7 @@ function FranchisesView({ player, onMakeSequel, onAcceptSale, onDeclineSale, onC
                   <span className="ht-text-dim"> — to {f.soldTo} in {f.soldYear}</span>
                 </span>
                 <span style={{ color: 'var(--gold-bright)', fontFamily: "'Playfair Display', serif", fontWeight: 700 }}>
-                  {fmtMoney(f.soldAmount)}
+                  {fmtMoneyYear(f.soldAmount, f.soldYear || player.year)}
                 </span>
               </div>
             ))}
@@ -10399,7 +10447,7 @@ function calcLegacy(player) {
     kids,
     marriages,
     scandalsTotal,
-    yearsActive: player.year - (player.startYear || 1985),
+    yearsActive: player.year - (player.startYear || 1970),
     retiredYear: player.year,
     retiredAge: player.age,
   };
@@ -10412,7 +10460,7 @@ function LegacyView({ player, onNewCareer, onContinue }) {
 
   return (
     <div className="ht-fade-in">
-      <Panel title="A Career Retrospective" subtitle={`${player.name} · ${player.startYear || 1985}–${legacy.retiredYear}`}>
+      <Panel title="A Career Retrospective" subtitle={`${player.name} · ${player.startYear || 1970}–${legacy.retiredYear}`}>
         {/* The Headline */}
         <div className="ht-poster" style={{ background: 'transparent', border: 'none', padding: 0, marginBottom: 20 }}>
           <div className="ht-poster-tag">★ The Trades ★</div>
@@ -10460,7 +10508,7 @@ function LegacyView({ player, onNewCareer, onContinue }) {
           <div className="ht-phase-block-title">The Career, in Brief</div>
           <ul style={{ paddingLeft: 20, lineHeight: 1.7 }}>
             <li>{legacy.yearsActive} years in the industry, retired at {legacy.retiredAge}.</li>
-            <li>{player.history.length} films released, grossing {fmtMoney(legacy.lifetimeBoxOffice)} lifetime.</li>
+            <li>{player.history.length} films released, grossing {fmtMoneyYear(legacy.lifetimeBoxOffice, legacy.retiredYear || player.year)} lifetime.</li>
             {player.awards?.wins > 0 && (
               <li>{player.awards.wins} major award{player.awards.wins === 1 ? '' : 's'}, {player.awards.nominations} nominations total.</li>
             )}
@@ -10471,7 +10519,7 @@ function LegacyView({ player, onNewCareer, onContinue }) {
               <li>Their most-remembered film: <strong style={{ color: 'var(--gold-bright)' }}>"{legacy.bestFilm.title}"</strong> ({legacy.bestFilm.releaseYear || legacy.bestFilm.year}) — critics {legacy.bestFilm.result.criticScore}, audiences {legacy.bestFilm.result.audienceScore}.</li>
             )}
             {legacy.topGrosser && legacy.topGrosser !== legacy.bestFilm && (
-              <li>Biggest hit: <strong>"{legacy.topGrosser.title}"</strong> — {fmtMoney(legacy.topGrosser.result.boxOffice)}.</li>
+              <li>Biggest hit: <strong>"{legacy.topGrosser.title}"</strong> — {fmtMoneyYear(legacy.topGrosser.result.boxOffice, legacy.topGrosser.releaseYear || legacy.topGrosser.year)}.</li>
             )}
             {legacy.topFranchise && legacy.topFranchise.entries.length >= 2 && (
               <li>Built the <strong>"{legacy.topFranchise.title}"</strong> franchise — {legacy.topFranchise.entries.length} entries.</li>
@@ -10661,7 +10709,7 @@ function WorldView({ player, onSignFirstLook, onCancelFirstLook, firstLookCost, 
                     <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(212,166,74,0.10)', border: '1px solid var(--gold-dim)', borderRadius: 2 }}>
                       <div style={{ fontSize: '0.82rem' }}>
                         <strong style={{ color: 'var(--gold-bright)' }}>📜 First-Look Deal Active</strong>
-                        <span className="ht-text-dim"> · expires {existingDeal.expiresYear} · paid {fmtMoney(existingDeal.totalPaid || existingDeal.retainerPaid)}</span>
+                        <span className="ht-text-dim"> · expires {existingDeal.expiresYear} · paid {fmtMoneyYear(existingDeal.totalPaid || existingDeal.retainerPaid, player.year)}</span>
                       </div>
                       <button
                         className="ht-btn ht-btn-sm"
@@ -10677,7 +10725,7 @@ function WorldView({ player, onSignFirstLook, onCancelFirstLook, firstLookCost, 
                   <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', borderRadius: 2 }}>
                     <div style={{ fontSize: '0.82rem', marginBottom: 4 }}>
                       <strong>First-Look Deal:</strong>
-                      <span className="ht-text-dim"> {fmtMoney(cost)}/year — they pitch you first</span>
+                      <span className="ht-text-dim"> {fmtMoneyYear(cost, player.year)}/year — they pitch you first</span>
                     </div>
                     <button
                       className="ht-btn ht-btn-sm ht-btn-primary"
@@ -10685,7 +10733,7 @@ function WorldView({ player, onSignFirstLook, onCancelFirstLook, firstLookCost, 
                       disabled={player.cash < cost}
                       onClick={() => onSignFirstLook(npc)}
                     >
-                      Sign · {fmtMoney(cost)}
+                      Sign · {fmtMoneyYear(cost, player.year)}
                     </button>
                   </div>
                 );
@@ -10845,7 +10893,7 @@ function SaveLoadView({ player, onLoad, onClose }) {
         <div className="ht-phase-block">
           <div className="ht-phase-block-title">Current Career</div>
           <p style={{ fontSize: '0.92rem', margin: '4px 0' }}>
-            <strong style={{ color: 'var(--gold-bright)' }}>{player.name}</strong> · Year {player.year} · Week {player.week} · Fame {Math.round(player.fame)} · {fmtMoney(player.cash)}
+            <strong style={{ color: 'var(--gold-bright)' }}>{player.name}</strong> · Year {player.year} · Week {player.week} · Fame {Math.round(player.fame)} · {fmtMoneyYear(player.cash, player.year)}
           </p>
         </div>
 
@@ -11095,7 +11143,7 @@ function PersonalLife({ player, production, onAction, onPlant, onClose }) {
               </div>
             ))}
             <div className="ht-text-dim" style={{ fontSize: '0.8rem', marginTop: 6 }}>
-              Weekly upkeep: {fmtMoney(childUpkeep(player))}
+              Weekly upkeep: {fmtMoneyYear(childUpkeep(player), player.year)}
             </div>
           </div>
         )}
@@ -11183,7 +11231,7 @@ function PersonalLife({ player, production, onAction, onPlant, onClose }) {
                           <span className="ht-tag" style={{ color: 'var(--red-bright)', borderColor: 'var(--red-bright)' }}>
                             {Math.round(plant.backfireChance * 100)}% backfire risk
                           </span>
-                          <span className="ht-tag">{fmtMoney(plant.cost)}</span>
+                          <span className="ht-tag">{fmtMoneyYear(plant.cost, player.year)}</span>
                         </div>
                       </div>
                       <button
@@ -11236,7 +11284,7 @@ function PersonalLife({ player, production, onAction, onPlant, onClose }) {
 
 function LifetimeAchievementModal({ player, onAccept }) {
   if (!player) return null;
-  const yearsActive = player.year - (player.startYear || 1985);
+  const yearsActive = player.year - (player.startYear || 1970);
   const careerHits = (player.history || []).filter(f => f.result?.hit).length;
   const wins = player.awards?.wins || 0;
 
@@ -11372,7 +11420,7 @@ function YearInVarietyModal({ year, player, onClose }) {
               {allYearFilms.length} {allYearFilms.length === 1 ? 'picture' : 'pictures'} hit screens.
               {yearHits > 0 && ` ${yearHits} ${yearHits === 1 ? 'hit' : 'hits'}.`}
               {yearFlops > 0 && ` ${yearFlops} ${yearFlops === 1 ? 'flop' : 'flops'}.`}
-              {' '}Total at the box office: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(yearBoxOffice)}</strong>.
+              {' '}Total at the box office: <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(yearBoxOffice, year)}</strong>.
             </p>
             <div style={{ marginTop: 8 }}>
               {allYearFilms.map((f, i) => {
@@ -11389,7 +11437,7 @@ function YearInVarietyModal({ year, player, onClose }) {
                       {flop && <span className="ht-tag" style={{ marginLeft: 6, borderColor: 'var(--red-bright)', color: 'var(--red-bright)' }}>Flop</span>}
                     </span>
                     <span className="ht-text-dim" style={{ fontSize: '0.82rem' }}>
-                      Q{f.result?.quality || '?'} · {fmtMoney(f.result?.boxOffice || 0)}
+                      Q{f.result?.quality || '?'} · {fmtMoneyYear(f.result?.boxOffice || 0, year)}
                     </span>
                   </div>
                 );
@@ -11474,7 +11522,7 @@ function YearInVarietyModal({ year, player, onClose }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px' }}>
             <div><span className="ht-text-dim">Age:</span> <strong>{player.age}</strong></div>
             <div><span className="ht-text-dim">Fame:</span> <strong>{Math.round(player.fame)}</strong></div>
-            <div><span className="ht-text-dim">Cash:</span> <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(player.cash)}</strong></div>
+            <div><span className="ht-text-dim">Cash:</span> <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(player.cash, player.year)}</strong></div>
             <div><span className="ht-text-dim">Films:</span> <strong>{(player.history || []).length}</strong></div>
           </div>
         </div>
@@ -12263,7 +12311,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         soldFranchises: soldFranchise ? [...(p.soldFranchises || []), soldFranchise] : (p.soldFranchises || []),
       };
     });
-    addLog('Business', `💰 Sold the "${offer.franchiseTitle}" franchise to ${offer.studio} for ${fmtMoney(offer.amount)}. Rights are transferred.`);
+    addLog('Business', `💰 Sold the "${offer.franchiseTitle}" franchise to ${offer.studio} for ${fmtMoneyYear(offer.amount, player.year)}. Rights are transferred.`);
   };
 
   // Decline a franchise offer
@@ -12313,7 +12361,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         lifetimeEarnings: (p.lifetimeEarnings || 0) + bump,
       };
     });
-    addLog('Release', `Re-released "${film.title}" as a Director's Cut. Added ${fmtMoney(bump)} to the gross. The critics took another look — kinder, this time.`);
+    addLog('Release', `Re-released "${film.title}" as a Director's Cut. Added ${fmtMoneyYear(bump, player.year)} to the gross. The critics took another look — kinder, this time.`);
     advanceWeek(4);
     setViewedFilm(null); // close the modal
   };
@@ -12354,7 +12402,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         },
       ],
     }));
-    addLog('Business', `📜 Signed a first-look deal with ${npc.name} for ${fmtMoney(cost)}/year. Their next pitch comes to you first.`);
+    addLog('Business', `📜 Signed a first-look deal with ${npc.name} for ${fmtMoneyYear(cost, player.year)}/year. Their next pitch comes to you first.`);
   };
 
   // Cancel a first-look deal at expiry. Saves the annual retainer going forward.
@@ -12458,7 +12506,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
           const renewCost = firstLookRetainer(npc);
           if (p.cash + cashDelta >= renewCost) {
             cashDelta -= renewCost;
-            logEntries.push(`📜 Renewed first-look with ${npc.name} for ${fmtMoney(renewCost)}.`);
+            logEntries.push(`📜 Renewed first-look with ${npc.name} for ${fmtMoneyYear(renewCost, currentYear)}.`);
             return {
               ...d,
               expiresYear: currentYear + 1,
@@ -12779,7 +12827,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         coProductions: [...(p.coProductions || []), newCoProduction],
       };
     });
-    addLog('Business', `💼 Committed ${fmtMoney(offer.commitment)} to co-producing "${offer.title}" with ${offer.studio}. They run the show.`);
+    addLog('Business', `💼 Committed ${fmtMoneyYear(offer.commitment, player.year)} to co-producing "${offer.title}" with ${offer.studio}. They run the show.`);
   };
 
   const declineCoProducingOffer = (offer) => {
@@ -12816,7 +12864,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     const totalRevenue = result.boxOffice || 0;
     const totalCost = coProd.budget + fakeProj.marketing;
     // Player's share of revenue based on profitSharePct
-    const playerRevenue = Math.round(totalRevenue * coProd.profitSharePct * 0.4); // *0.4 is the rentals-vs-box-office ratio (rough 1985 norm)
+    const playerRevenue = Math.round(totalRevenue * coProd.profitSharePct * 0.4); // *0.4 is the rentals-vs-box-office ratio (a historically stable ~40% split)
     const playerOutcome = playerRevenue - coProd.commitment;
     const settled = {
       ...coProd,
@@ -12846,9 +12894,9 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       };
     });
     const verdict = playerOutcome > 0
-      ? `Returned ${fmtMoney(playerRevenue)} (net +${fmtMoney(playerOutcome)}).`
+      ? `Returned ${fmtMoneyYear(playerRevenue, player.year)} (net +${fmtMoneyYear(playerOutcome, player.year)}).`
       : playerOutcome < 0
-        ? `Returned ${fmtMoney(playerRevenue)} (net ${fmtMoney(playerOutcome)}).`
+        ? `Returned ${fmtMoneyYear(playerRevenue, player.year)} (net ${fmtMoneyYear(playerOutcome, player.year)}).`
         : `Broke even on your share.`;
     addLog('Business', `🎬 Co-production "${coProd.title}" settled. ${verdict} ${result.hit ? 'A hit.' : result.flop ? 'A flop.' : 'Mid-pack.'}`);
   };
@@ -12965,7 +13013,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       energy: clamp(p.energy - 20, 0, 100),
       skills: { ...p.skills, [role]: p.skills[role] + gain },
     }));
-    addLog('Training', `Studied ${ROLE_LABELS[role].toLowerCase()} craft. +${gain} skill (cost ${fmtMoney(cost)}).`);
+    addLog('Training', `Studied ${ROLE_LABELS[role].toLowerCase()} craft. +${gain} skill (cost ${fmtMoneyYear(cost, player.year)}).`);
     advanceWeek(1);
   };
 
@@ -12973,7 +13021,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
   const sideJob = () => {
     const pay = randInt(800, 3000);
     setPlayer(p => ({ ...p, cash: p.cash + pay, lifetimeEarnings: (p.lifetimeEarnings || 0) + pay, energy: clamp(p.energy - 15, 0, 100) }));
-    addLog('Hustle', `Worked a side gig for ${fmtMoney(pay)}.`);
+    addLog('Hustle', `Worked a side gig for ${fmtMoneyYear(pay, player.year)}.`);
     advanceWeek(1);
   };
 
@@ -13381,7 +13429,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     // Show opening weekend modal (not the final-result modal)
     setOpening({ film: enrichedProj, result, openingGross: openingWeek.gross, totalProjected: result.boxOffice });
 
-    const headline = `"${proj.title}" opens to ${fmtMoney(openingWeek.gross)}. ${result.criticScore >= 70 ? 'Critics are raving.' : result.criticScore >= 50 ? 'Reviews are mixed.' : 'The reviews are brutal.'}`;
+    const headline = `"${proj.title}" opens to ${fmtMoneyYear(openingWeek.gross, player.year)}. ${result.criticScore >= 70 ? 'Critics are raving.' : result.criticScore >= 50 ? 'Reviews are mixed.' : 'The reviews are brutal.'}`;
     addLog('Release', headline);
 
     // Specialty milestone — check if this release just pushed the player across a tier
@@ -13596,7 +13644,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       };
     });
 
-    const headline = `🎬 "${proj.title}" opens to ${fmtMoney(openingWeek.gross)} (released without you on hand). ${result.criticScore >= 70 ? 'Critics raving.' : result.criticScore >= 50 ? 'Mixed reviews.' : 'The reviews are brutal.'}`;
+    const headline = `🎬 "${proj.title}" opens to ${fmtMoneyYear(openingWeek.gross, player.year)} (released without you on hand). ${result.criticScore >= 70 ? 'Critics raving.' : result.criticScore >= 50 ? 'Mixed reviews.' : 'The reviews are brutal.'}`;
     addLog('Release', headline);
   };
 
@@ -13781,7 +13829,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
   const foundStudio = () => {
     const cost = 250_000;
     if (player.cash < cost) {
-      addLog('Studio', `Need ${fmtMoney(cost)} to incorporate a studio. Saved cash: ${fmtMoney(player.cash)}.`);
+      addLog('Studio', `Need ${fmtMoneyYear(cost, player.year)} to incorporate a studio. Saved cash: ${fmtMoneyYear(player.cash, player.year)}.`);
       return;
     }
     const name = generateStudioName(player.name);
@@ -13800,7 +13848,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         reserves: 0, // separate pool earning monthly interest
       },
     }));
-    addLog('Studio', `Founded ${name}! The doors are open. (Cost: ${fmtMoney(cost)})`);
+    addLog('Studio', `Founded ${name}! The doors are open. (Cost: ${fmtMoneyYear(cost, player.year)})`);
     setPendingFoundStudio(false);
   };
 
@@ -13814,7 +13862,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       cash: p.cash - amount,
       studio: { ...p.studio, reserves: (p.studio.reserves || 0) + amount },
     }));
-    addLog('Studio', `Moved ${fmtMoney(amount)} to studio reserves.`);
+    addLog('Studio', `Moved ${fmtMoneyYear(amount, player.year)} to studio reserves.`);
   };
 
   const withdrawFromReserves = (amount) => {
@@ -13828,7 +13876,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       cash: p.cash + amount,
       studio: { ...p.studio, reserves: (p.studio.reserves || 0) - amount },
     }));
-    addLog('Studio', `Withdrew ${fmtMoney(amount)} from studio reserves.`);
+    addLog('Studio', `Withdrew ${fmtMoneyYear(amount, player.year)} from studio reserves.`);
   };
 
   // ===== Make a Sequel =====
@@ -13862,7 +13910,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         possessions: newPossessions,
       };
     });
-    addLog('Acquired', `Acquired ${item.name} for ${fmtMoney(item.price)}.`);
+    addLog('Acquired', `Acquired ${item.name} for ${fmtMoneyYear(item.price, player.year)}.`);
   };
 
   const sellItem = (item) => {
@@ -13874,7 +13922,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       possessions: (p.possessions || []).filter(id => id !== item.id),
     }));
     if (refund > 0) {
-      addLog('Sold', `Sold ${item.name} for ${fmtMoney(refund)}.`);
+      addLog('Sold', `Sold ${item.name} for ${fmtMoneyYear(refund, player.year)}.`);
     } else {
       addLog('Released', `Released ${item.name} from service.`);
     }
@@ -13896,9 +13944,9 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         energy: clamp(p.energy + (effects.energy || 0), 0, 100),
       }));
       if (win) {
-        addLog('Vegas', `Hit it big in Vegas — won ${fmtMoney(result)} on a ${fmtMoney(item.price)} weekend.`);
+        addLog('Vegas', `Hit it big in Vegas — won ${fmtMoney(result)} on a ${fmtMoneyYear(item.price, player.year)} weekend.`);
       } else {
-        addLog('Vegas', `Lost the whole ${fmtMoney(item.price)} in Vegas. Should've stayed home.`);
+        addLog('Vegas', `Lost the whole ${fmtMoneyYear(item.price, player.year)} in Vegas. Should've stayed home.`);
       }
       advanceWeek(1);
       return;
@@ -13941,7 +13989,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         energy: clamp(p.energy + (effects.energy || 0), 0, 100),
       };
     });
-    addLog('Indulgence', `${item.name}. ${fmtMoney(item.price)} spent.`);
+    addLog('Indulgence', `${item.name}. ${fmtMoneyYear(item.price, player.year)} spent.`);
     if (effects.weeksAdvance) {
       advanceWeek(effects.weeksAdvance);
     }
@@ -14161,7 +14209,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
             worldNPCs: newWorldNPCs,
           };
         });
-        addLog('Personal', `Divorced ${partner?.name}. Alimony cost ${fmtMoney(alimony)}.`);
+        addLog('Personal', `Divorced ${partner?.name}. Alimony cost ${fmtMoneyYear(alimony, player.year)}.`);
         break;
       }
       default:
@@ -14434,7 +14482,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         <div className="ht-studio-banner">
           <div className="ht-studio-name">{player.studio.name}</div>
           <div className="ht-studio-sub">
-            Est. {player.studio.founded} · {player.studio.releases} releases · {player.studio.hits} hits · {player.studio.flops} flops · Lifetime gross {fmtMoney(player.studio.totalRevenue)}
+            Est. {player.studio.founded} · {player.studio.releases} releases · {player.studio.hits} hits · {player.studio.flops} flops · Lifetime gross {fmtMoneyYear(player.studio.totalRevenue, player.year)}
           </div>
         </div>
       )}
@@ -14531,7 +14579,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
               id="reserves"
               title="Studio Reserves"
               subtitle="Park money for slow growth — locked during production"
-              badge={(player.studio.reserves || 0) > 0 ? fmtMoney(player.studio.reserves || 0) : 'Empty'}
+              badge={(player.studio.reserves || 0) > 0 ? fmtMoneyYear(player.studio.reserves || 0, player.year) : 'Empty'}
               defaultOpen={false}
             >
               <ReservesPanel
@@ -14683,7 +14731,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                       </div>
                       {item.weeklyUpkeep > 0 && (
                         <div className="ht-text-dim" style={{ fontSize: '0.75rem' }}>
-                          {fmtMoney(item.weeklyUpkeep)}/wk upkeep
+                          {fmtMoneyYear(item.weeklyUpkeep, player.year)}/wk upkeep
                         </div>
                       )}
                     </div>
@@ -14842,12 +14890,12 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                       <div>
                         <span className="ht-tag">C {film.result.criticScore}</span>
                         <span className="ht-tag">A {film.result.audienceScore}</span>
-                        <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(totalSoFar)}</strong>
+                        <strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(totalSoFar, film.releaseYear || film.year || player.year)}</strong>
                       </div>
                     </div>
                     {/* Mini sparkline */}
                     <div style={{ marginTop: 8 }}>
-                      <BoxOfficeChart run={partialRun} height={70} showCumulative={false} totalWeeks={film.runWeeks} />
+                      <BoxOfficeChart run={partialRun} height={70} showCumulative={false} totalWeeks={film.runWeeks} year={film.releaseYear || film.year || player.year} />
                     </div>
                   </div>
                 );
@@ -14905,7 +14953,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                         <span className="ht-tag">C {m.result.criticScore}</span>
                         <span className="ht-tag">A {m.result.audienceScore}</span>
                         <span style={{ color: m.result.profit > 0 ? '#6fcc4c' : 'var(--red-bright)', fontWeight: 700 }}>
-                          {fmtMoney(m.result.boxOffice)}
+                          {fmtMoneyYear(m.result.boxOffice, m.releaseYear || m.year)}
                         </span>
                       </span>
                     </div>
@@ -15011,8 +15059,8 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                       <div className="ht-text-dim">A {o.genre} picture · You: {ROLE_LABELS[o.playerRole]}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div><span className="ht-tag">Budget</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(o.budget)}</strong></div>
-                      <div style={{ marginTop: 4 }}><span className="ht-tag">Your Pay</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(o.pay)}</strong></div>
+                      <div><span className="ht-tag">Budget</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(o.budget, player.year)}</strong></div>
+                      <div style={{ marginTop: 4 }}><span className="ht-tag">Your Pay</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(o.pay, player.year)}</strong></div>
                     </div>
                   </div>
                   <div style={{ fontSize: '0.88rem', marginTop: 10 }}>
@@ -15063,8 +15111,8 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                         <div className="ht-text-dim">A {a.genre} picture · Casting: {ROLE_LABELS[a.playerRole]}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div><span className="ht-tag">Budget</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(a.budget)}</strong></div>
-                        <div style={{ marginTop: 4 }}><span className="ht-tag">If Booked</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoney(a.pay)}</strong></div>
+                        <div><span className="ht-tag">Budget</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(a.budget, player.year)}</strong></div>
+                        <div style={{ marginTop: 4 }}><span className="ht-tag">If Booked</span><strong style={{ color: 'var(--gold-bright)' }}>{fmtMoneyYear(a.pay, player.year)}</strong></div>
                       </div>
                     </div>
                     <div style={{ fontSize: '0.88rem', marginTop: 10 }}>
@@ -15135,7 +15183,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                   onClick={() => train(r)}
                   disabled={player.cash < cost}
                 >
-                  Train · {fmtMoney(cost)}
+                  Train · {fmtMoneyYear(cost, player.year)}
                 </button>
               </div>
             );
@@ -15275,7 +15323,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
           <div className="ht-fade-in">
             <Panel title="Retire from the Industry?" subtitle="A career has a beginning, a middle, and an end">
               <p style={{ fontSize: '1rem', lineHeight: 1.6 }}>
-                You've been at this for {player.year - (player.startYear || 1985)} years. {player.history.length} films. {player.awards?.wins || 0} wins.
+                You've been at this for {player.year - (player.startYear || 1970)} years. {player.history.length} films. {player.awards?.wins || 0} wins.
               </p>
 
               {/* Legacy preview */}
@@ -15311,7 +15359,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                     empireScore += Math.min(20, Object.keys(player.franchises || {}).length * 5);
                     const filmScore = Math.round(clamp(player.history.length * 1.5, 0, 30));
                     const rows = [
-                      ['Lifetime Box Office', boxScore, 50, fmtMoney(lifetimeBox)],
+                      ['Lifetime Box Office', boxScore, 50, fmtMoneyYear(lifetimeBox, player.year)],
                       ['Awards (wins + noms)', awardScore, 60, `${wins} wins, ${noms - wins} additional noms`],
                       ['Peak Fame', peakScore, 40, `peaked at ${Math.round(player.peakFame || 0)}`],
                       ['Empire (studio + franchises)', empireScore, 40, `${player.studio ? 'studio' : 'no studio'}, ${Object.keys(player.franchises || {}).length} franchise${Object.keys(player.franchises || {}).length === 1 ? '' : 's'}`],
@@ -15416,7 +15464,7 @@ export default function App() {
         // (NPCs are tied to player saves, not world state — we just preserve legends + generation)
         setInheritedWorld({
           worldNPCs: null, // will fall through to fresh seed in initialPlayer
-          newStartYear: 1985 + (world.generation - 1) * 30, // each generation = 30 years later
+          newStartYear: 1970 + (world.generation - 1) * 30, // each generation = 30 years later
           legends: world.legends,
           generation: world.generation,
         });
@@ -15527,7 +15575,7 @@ function ResumeScreen({ save, onResume, onDecline }) {
           </p>
           <p style={{ fontSize: '0.92rem' }}>
             Year {save.year} · Week {save.week} · Age {save.age}<br />
-            Fame {Math.round(save.fame)} · {fmtMoney(save.cash)} on hand<br />
+            Fame {Math.round(save.fame)} · {fmtMoneyYear(save.cash, save.year)} on hand<br />
             {save.history?.length || 0} films released
             {save.studio && ` · runs ${save.studio.name}`}
           </p>

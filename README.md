@@ -1,6 +1,6 @@
 # Hollywood Tycoon
 
-A 1985-era career and business simulator where you arrive in Hollywood with one craft, a small bank account, and forty-odd years to figure out what you want to be remembered for.
+A career and business simulator set in the New Hollywood era — you arrive in 1970 with one craft, a small bank account, and forty-odd years to figure out what you want to be remembered for.
 
 You can be an actor, director, producer, or writer. You can become two of those, or three, or four. You can run a studio, build a franchise, fall in love, get divorced in public, become America's horror director, marry your three-time co-star, retire as a legend, and then watch your name on the marquee thirty years later when your kid starts their own career.
 
@@ -157,10 +157,10 @@ Four festivals modeled, each with a window in the calendar year, an acceptance a
 
 | Festival | Window | Fee | Quality Bar | Base Accept | Critic Boost | Audience Cost | Awards Boost |
 |---|---|---|---|---|---|---|---|
-| Sundance | Week 3–5 | $5K | 60+ | 40% | +8 | -3 | +4 |
+| Berlinale | Week 7–9 | $12K | 66+ | 32% | +11 | -3 | +7 |
 | Cannes | Week 19–21 | $25K | 72+ | 20% | +18 | -5 | +10 |
 | Venice | Week 35–37 | $15K | 68+ | 30% | +14 | -4 | +8 |
-| Toronto | Week 37–39 | $12K | 64+ | 40% | +10 | -2 | +6 |
+| New York | Week 39–41 | $5K | 62+ | 35% | +12 | -3 | +5 |
 
 Acceptance is computed in `festivalAcceptanceChance` from base rate × quality vs threshold × budget sweet spot × genre match × director reputation × prior award wins. Submissions happen during the Marketing phase, only the producer or director can submit. The roll resolves immediately. Accepted films delay wide release by 4 weeks. The `awardScoreBoost` flows directly into awards body scoring at year-end, so festival cred translates to nomination odds.
 
@@ -509,7 +509,7 @@ Films matching the festival's prestige genres get a 40% weight bonus on selectio
 
 These are the rules to keep consistent. If you extend the game, applying these will keep it feeling like the same game.
 
-1. **It's 1985.** No anachronisms. Tabloids should sound like the era (talk shows, magazine covers, supermarket rags). Money amounts should feel period-appropriate (a $20M budget is large; $200M is huge).
+1. **The default opening is 1970, and the career spans ~40 years.** Tabloids and flavor should sound era-appropriate (talk shows, magazine covers, supermarket rags — the textures evolve as the decades roll forward). Money is displayed in *period dollars*: the engine stores values in constant 1985-base dollars and converts to year-relative dollars at every display site via `inflationFactor(year)`. A $20M-base picture displays as ~$7M in 1970, ~$32M in 2000, ~$48M in 2020 — the same simulation, the same relative scale, year-correct numbers.
 
 2. **Realistic but fun.** Luck matters. Nothing is guaranteed. Big stars flop. Tiny indies hit. But the player's choices should *matter* — skill, marketing, and effort should shift the odds.
 
