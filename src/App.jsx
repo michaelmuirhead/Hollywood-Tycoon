@@ -9,6 +9,37 @@ import React, { useState, useEffect, useMemo } from 'react';
 
 const ROLES = ['actor', 'director', 'producer', 'writer'];
 
+// Per-role caps on concurrent in-flight productions. Real Hollywood reflects
+// these — actors can stack 3-5 films across phases, producers manage 4-8 at a
+// time, writers usually have 2-3 in development, but a director's hands are
+// tied to the picture they're making for ~18 months.
+const ROLE_CAPS = {
+  actor: 5,
+  producer: 8,
+  writer: 3,
+  director: 1,
+};
+
+// Count how many active productions the player holds each role on. Roles are
+// counted phase-aware where it matters: a director only "blocks" while the
+// picture is in filming or post (pre-prod and marketing are lighter touch and
+// overlap-friendly in real Hollywood). Actors count whenever they haven't
+// wrapped — once their scenes are in the can, the slot frees up. Producer and
+// writer always count because they're paperwork roles spanning the whole arc.
+function getRoleCommitments(player) {
+  const counts = { actor: 0, director: 0, producer: 0, writer: 0 };
+  const blockingDirectorPhases = new Set(['filming', 'postprod']);
+  for (const prod of (player.activeProductions || [])) {
+    for (const r of (prod.proj?.playerRoles || [])) {
+      if (counts[r] === undefined) continue;
+      if (r === 'director' && !blockingDirectorPhases.has(prod.phase)) continue;
+      if (r === 'actor' && prod.playerWrapped) continue;
+      counts[r] += 1;
+    }
+  }
+  return counts;
+}
+
 const ROLE_LABELS = {
   actor: 'Actor',
   director: 'Director',
@@ -143,6 +174,18 @@ function unpackSave(raw) {
     coProducingOffers: p.coProducingOffers || [], // pending producer-on-hire offers
     coProductions: p.coProductions || [], // films you have capital invested in, awaiting release
     coProductionsHistory: p.coProductionsHistory || [], // settled co-productions — for history
+    // Unified production list. Each entry is a full production state (proj, mods,
+    // phase, per-phase event queues, etc.) plus a status flag:
+    //   - 'inProgress': the currently-viewed/foreground production
+    //   - 'background': progressing without the player on screen (actor wrapped)
+    // Migration from the old `backgroundProductions[]` field happens here so
+    // existing Phase-2 saves continue to work.
+    activeProductions: p.activeProductions || (p.backgroundProductions || []).map(bg => ({
+      ...bg,
+      id: bg.id || `prod_${Math.random().toString(36).slice(2, 10)}`,
+      status: 'background',
+      playerWrapped: bg.playerWrapped !== false,
+    })),
   };
 }
 
@@ -392,6 +435,7 @@ function initialPlayer(name, startingRole, inheritedWorld = null) {
     coProducingOffers: [],   // pending producer-on-hire offers
     coProductions: [],       // accepted, in-production
     coProductionsHistory: [], // settled (released)
+    activeProductions: [],   // unified slate: all films the player is currently making (foreground + background)
   };
 }
 
@@ -2339,7 +2383,7 @@ const TABLOID_EVENTS = [
     id: 'method_acting_doubts',
     tier: [10, 40],
     tags: ['career'],
-    condition: (p) => (p.activeProduction || p.inTheaters?.length > 0) && p.skills.actor >= 25,
+    condition: (p) => ((p.activeProductions || []).length > 0 || p.inTheaters?.length > 0) && p.skills.actor >= 25,
     headline: (p) => `'TOO MUCH'? ${headlineName(p.name)}'S METHOD APPROACH 'CONCERNING' SET SOURCES`,
     flavor: () => `Three sources from your last set say you stayed in character on lunch breaks, refused to use your real name, and slept in the costume trailer. The trades are split on whether it's dedication or pretension.`,
     choices: [
@@ -2392,7 +2436,7 @@ const TABLOID_EVENTS = [
     id: 'set_romance_rumor',
     tier: [25, 65],
     tags: ['rumor', 'romance'],
-    condition: (p) => (p.inTheaters?.length > 0 || p.activeProduction) && (!p.personal.partner || p.personal.relationshipHealth < 70),
+    condition: (p) => (p.inTheaters?.length > 0 || (p.activeProductions || []).length > 0) && (!p.personal.partner || p.personal.relationshipHealth < 70),
     headline: (p) => `'IT'S DEFINITELY ON': PRODUCTION ASSISTANT 'SOURCES' ON ${headlineName(p.name)} SET ROMANCE`,
     flavor: () => `A "PA on the production" — three different ones, somehow — say there's something happening on set. Photos appear within a week. They're ambiguous.`,
     choices: [
@@ -2542,7 +2586,7 @@ const TABLOID_EVENTS = [
     id: 'set_visit_disaster',
     tier: [30, 70],
     tags: ['scandal', 'industry'],
-    condition: (p) => p.activeProduction || (p.inTheaters?.length > 0),
+    condition: (p) => (p.activeProductions || []).length > 0 || (p.inTheaters?.length > 0),
     headline: (p) => `STUDIO HEAD WALKED OFF ${headlineName(p.name)}'S SET 'DISGUSTED'`,
     flavor: () => `A visit from a major studio executive to your current production reportedly ended with them walking out. The reason: unclear. Speculation: rampant. Your publicist isn\'t taking calls.`,
     choices: [
@@ -2823,7 +2867,7 @@ const TABLOID_EVENTS = [
     id: 'casting_controversy',
     tier: [50, 100],
     tags: ['scandal', 'industry'],
-    condition: (p) => p.activeProduction && p.fame >= 50,
+    condition: (p) => (p.activeProductions || []).length > 0 && p.fame >= 50,
     headline: (p) => `'WRONG CHOICE': ${headlineName(p.name)} FACES CRITICISM OVER ${pick(['CASTING', 'CO-STAR', 'DIRECTOR'])} DECISION`,
     flavor: () => `A casting choice on your current production is generating a public debate. Letters to the editor. Op-eds. Some thoughtful, some bad-faith. None of it good for the production.`,
     choices: [
@@ -6588,23 +6632,37 @@ function ProjectBuilder({ player, offer, sequelOf, onCancel, onProduce }) {
         <hr className="ht-divider" />
 
         <div className="ht-label">Your Role(s) on This Picture</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
           {ROLES.map(r => {
             const isSelected = playerRoles.includes(r);
             const canDo = player.skills[r] >= 5;
             const lockedByOffer = offer && r !== offer.playerRole;
+            // Cap check: how many active productions already have the player in this role?
+            // Adding this picture would push commitments to commitments+1; cap is the limit.
+            const commitments = getRoleCommitments(player);
+            const wouldExceedCap = !isSelected && (commitments[r] || 0) >= ROLE_CAPS[r];
+            const capTooltip = wouldExceedCap
+              ? `You're at the limit for ${ROLE_LABELS[r].toLowerCase()} (${commitments[r]}/${ROLE_CAPS[r]} in flight). Wrap or release one before adding another.`
+              : '';
             return (
               <button
                 key={r}
                 className={`ht-btn ht-btn-sm ${isSelected ? 'ht-btn-primary' : ''}`}
                 onClick={() => togglePlayerRole(r)}
-                disabled={offer ? lockedByOffer : !canDo}
-                title={!canDo ? 'Skill too low' : ''}
+                disabled={offer ? lockedByOffer : (!canDo || wouldExceedCap)}
+                title={!canDo ? 'Skill too low' : capTooltip}
               >
                 {ROLE_LABELS[r]} {isSelected ? '✓' : ''}
+                {wouldExceedCap && <span style={{ fontSize: '0.7rem', marginLeft: 4 }}>🔒</span>}
               </button>
             );
           })}
+        </div>
+        <div className="ht-text-dim" style={{ fontSize: '0.78rem', marginBottom: 16 }}>
+          {(() => {
+            const c = getRoleCommitments(player);
+            return `In flight: ${ROLES.map(r => `${ROLE_LABELS[r]} ${c[r]}/${ROLE_CAPS[r]}`).join(' · ')}`;
+          })()}
         </div>
 
         <div className="ht-label">The Crew</div>
@@ -7067,35 +7125,30 @@ function AuditionResultModal({ data, onAccept, onClose }) {
 // A vintage-feel chart of a film's weekly run.
 // We draw bars for each week's gross and overlay a line for cumulative total.
 
-function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = false }) {
+function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = false, totalWeeks }) {
   if (!run || run.length === 0) return null;
 
-  const weeks = run.length;
+  const playedWeeks = run.length;
+  // Show the full planned run if totalWeeks is provided — upcoming weeks render
+  // as faint placeholder bars so the chart visually conveys progress.
+  const barCount = Math.max(playedWeeks, totalWeeks || 0);
   const maxWeekly = Math.max(...run.map(w => w.gross));
-  const totalCum = run[run.length - 1].cumulative;
+  const totalCum = run[playedWeeks - 1].cumulative;
 
-  const padL = 40;
-  const padR = 20;
-  const padT = 14;
-  const padB = 28;
-  const chartW = 600; // logical width; svg scales
+  const padL = 44;
+  const padR = 16;
+  const padT = height >= 120 ? 22 : 14;
+  const padB = 26;
+  // Natural bar width — chart sizes itself to its data rather than stretching.
+  const barW = 44;
+  const chartW = padL + padR + barCount * barW;
   const chartH = height;
-  const barAreaW = chartW - padL - padR;
   const barAreaH = chartH - padT - padB;
-  const barW = barAreaW / weeks;
 
-  // Bar heights
-  const barY = (val) => padT + barAreaH - (val / (maxWeekly || 1)) * barAreaH;
+  // Smart tick count — short charts can't fit many y-axis labels without overlap.
+  const ticks = chartH < 100 ? 2 : 4;
+  const showValueLabels = chartH >= 130;
 
-  // Cumulative line
-  const cumLine = run.map((w, i) => {
-    const x = padL + i * barW + barW / 2;
-    const y = padT + barAreaH - (w.cumulative / (totalCum || 1)) * barAreaH;
-    return `${i === 0 ? 'M' : 'L'}${x},${y}`;
-  }).join(' ');
-
-  // Y-axis labels (weekly grosses)
-  const ticks = 4;
   const yLabels = Array.from({ length: ticks + 1 }, (_, i) => {
     const val = maxWeekly * (1 - i / ticks);
     return {
@@ -7104,63 +7157,131 @@ function BoxOfficeChart({ run, height = 180, showCumulative = true, projected = 
     };
   });
 
+  // Cumulative line — only over weeks we've actually played.
+  const cumLine = run.map((w, i) => {
+    const x = padL + i * barW + barW / 2;
+    const y = padT + barAreaH - (w.cumulative / (totalCum || 1)) * barAreaH;
+    return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+  }).join(' ');
+
   return (
-    <svg
-      viewBox={`0 0 ${chartW} ${chartH}`}
-      preserveAspectRatio="none"
-      style={{ width: '100%', height, display: 'block', background: 'rgba(0,0,0,0.25)', border: '1px solid var(--border)' }}
-    >
-      {/* Grid lines */}
-      {yLabels.map((t, i) => (
-        <g key={i}>
-          <line x1={padL} x2={chartW - padR} y1={t.y} y2={t.y} stroke="rgba(212,166,74,0.1)" strokeWidth="1" />
-          <text x={padL - 6} y={t.y + 4} textAnchor="end" fill="rgba(243,230,196,0.5)" fontSize="10" fontFamily="'Special Elite', monospace">{t.label}</text>
-        </g>
-      ))}
+    <div style={{ width: '100%', maxWidth: chartW, margin: '0 auto' }}>
+      <svg
+        viewBox={`0 0 ${chartW} ${chartH}`}
+        preserveAspectRatio="xMidYMid meet"
+        width="100%"
+        style={{ display: 'block', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', borderRadius: 2 }}
+      >
+        <defs>
+          <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f0c460" />
+            <stop offset="100%" stopColor="#8a6f2d" />
+          </linearGradient>
+          <linearGradient id="barGradProjected" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(212,166,74,0.35)" />
+            <stop offset="100%" stopColor="rgba(212,166,74,0.15)" />
+          </linearGradient>
+        </defs>
 
-      {/* Bars (weekly gross) */}
-      {run.map((w, i) => {
-        const x = padL + i * barW + 1;
-        const h = (w.gross / (maxWeekly || 1)) * barAreaH;
-        const y = padT + barAreaH - h;
-        return (
+        {/* Grid lines + y-axis labels */}
+        {yLabels.map((t, i) => (
           <g key={i}>
-            <rect
-              x={x}
-              y={y}
-              width={Math.max(2, barW - 2)}
-              height={h}
-              fill={projected ? 'rgba(212,166,74,0.3)' : 'url(#barGrad)'}
-              stroke="var(--gold-dim)"
-              strokeWidth="0.5"
-            />
-            {/* X-axis labels (week numbers) */}
-            <text x={x + barW / 2} y={chartH - padB + 14} textAnchor="middle" fill="rgba(243,230,196,0.6)" fontSize="9" fontFamily="'Special Elite', monospace">
-              W{w.weekInRun}
-            </text>
+            <line x1={padL} x2={chartW - padR} y1={t.y} y2={t.y} stroke="rgba(212,166,74,0.12)" strokeWidth="1" />
+            <text x={padL - 8} y={t.y + 3} textAnchor="end" fill="rgba(243,230,196,0.55)" fontSize="9" fontFamily="'Special Elite', monospace">{t.label}</text>
           </g>
-        );
-      })}
+        ))}
 
-      {/* Cumulative line overlay */}
-      {showCumulative && (
-        <>
-          <path d={cumLine} stroke="var(--gold-bright)" strokeWidth="2" fill="none" opacity="0.85" />
-          {run.map((w, i) => {
-            const x = padL + i * barW + barW / 2;
-            const y = padT + barAreaH - (w.cumulative / (totalCum || 1)) * barAreaH;
-            return <circle key={i} cx={x} cy={y} r="2.5" fill="var(--gold-bright)" />;
-          })}
-        </>
-      )}
+        {/* Baseline */}
+        <line x1={padL} x2={chartW - padR} y1={padT + barAreaH} y2={padT + barAreaH} stroke="rgba(212,166,74,0.3)" strokeWidth="1" />
 
-      <defs>
-        <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#f0c460" />
-          <stop offset="100%" stopColor="#8a6f2d" />
-        </linearGradient>
-      </defs>
-    </svg>
+        {/* Placeholder bars for upcoming weeks (when totalWeeks provided) */}
+        {Array.from({ length: barCount }, (_, i) => {
+          const isPlayed = i < playedWeeks;
+          const w = isPlayed ? run[i] : null;
+          const x = padL + i * barW + 4;
+          const innerW = barW - 8;
+          if (!isPlayed) {
+            // Faint hatched rectangle showing "this week is yet to play"
+            const hint = barAreaH * 0.08;
+            return (
+              <rect
+                key={`ph-${i}`}
+                x={x}
+                y={padT + barAreaH - hint}
+                width={innerW}
+                height={hint}
+                fill="rgba(212,166,74,0.1)"
+                stroke="rgba(212,166,74,0.25)"
+                strokeWidth="0.5"
+                strokeDasharray="2 2"
+                rx="1.5"
+              />
+            );
+          }
+          const h = Math.max(2, (w.gross / (maxWeekly || 1)) * barAreaH);
+          const y = padT + barAreaH - h;
+          return (
+            <g key={i}>
+              <rect
+                x={x}
+                y={y}
+                width={innerW}
+                height={h}
+                fill={projected ? 'url(#barGradProjected)' : 'url(#barGrad)'}
+                stroke="var(--gold-dim)"
+                strokeWidth="0.5"
+                rx="2"
+              />
+              {showValueLabels && (
+                <text
+                  x={x + innerW / 2}
+                  y={y - 4}
+                  textAnchor="middle"
+                  fill="rgba(243,230,196,0.85)"
+                  fontSize="9"
+                  fontFamily="'Special Elite', monospace"
+                >
+                  {fmtMoney(w.gross).replace('$', '')}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* X-axis labels (week numbers) — every week, with dimmed style for upcoming */}
+        {Array.from({ length: barCount }, (_, i) => {
+          const isPlayed = i < playedWeeks;
+          const x = padL + i * barW + barW / 2;
+          // For very wide runs, only label every other week to avoid crowding
+          if (barCount > 14 && i % 2 !== 0) return null;
+          return (
+            <text
+              key={`xl-${i}`}
+              x={x}
+              y={chartH - padB + 14}
+              textAnchor="middle"
+              fill={isPlayed ? 'rgba(243,230,196,0.65)' : 'rgba(243,230,196,0.3)'}
+              fontSize="9"
+              fontFamily="'Special Elite', monospace"
+            >
+              W{i + 1}
+            </text>
+          );
+        })}
+
+        {/* Cumulative line overlay */}
+        {showCumulative && (
+          <>
+            <path d={cumLine} stroke="var(--gold-bright)" strokeWidth="2" fill="none" opacity="0.85" strokeLinejoin="round" strokeLinecap="round" />
+            {run.map((w, i) => {
+              const x = padL + i * barW + barW / 2;
+              const y = padT + barAreaH - (w.cumulative / (totalCum || 1)) * barAreaH;
+              return <circle key={i} cx={x} cy={y} r="2.5" fill="var(--gold-bright)" />;
+            })}
+          </>
+        )}
+      </svg>
+    </div>
   );
 }
 
@@ -7571,9 +7692,98 @@ function renderFilmCredit(film, cat) {
 //
 // Each phase accumulates production.mods: { qualityMod, marketingMod, costOverrun }
 
-function makeFilmingEvents(production) {
-  // Generate 3-5 events keyed to the production
-  const pool = [
+// ===== PHASE EVENT SYSTEM =====
+//
+// Every production phase (pre-prod, filming, post-prod, marketing) generates
+// a sequence of events the player walks through one week at a time. Each
+// event has role-gated choices: only the listed roles can pick. NPCs auto-pick
+// when the player isn't in the room. Effects feed the same accumulator
+// (qualityMod, costOverrun, marketingMod) used at release.
+//
+// Schema:
+//   { id, headline, flavor, choices: [{ label, effect, who: ['role'...] }] }
+// Effects supported: quality, cost (fraction of budget), marketing, energy,
+// fame, marketingBudget, fycSpend.
+
+const PHASE_EVENT_POOLS = {
+  // ---- PRE-PRODUCTION (4-5 weeks: casting, locations, table reads, schedule) ----
+  preprod: [
+    {
+      id: 'casting_holdout', headline: 'Top supporting role is in negotiation',
+      flavor: 'Your first-choice supporting actor is asking for more money. Their agent is dragging it out.',
+      choices: [
+        { label: 'Pay the quote (strong cast)', effect: { quality: 4, cost: 0.025 }, who: ['producer', 'director'] },
+        { label: 'Hold the line, recast', effect: { quality: -2, cost: 0 }, who: ['producer'] },
+        { label: 'Counteroffer with backend points', effect: { quality: 3, cost: 0.01 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'location_scout', headline: 'Location scouting brings options',
+      flavor: 'Two viable locations: a stunning practical and a cheap soundstage that can fake it.',
+      choices: [
+        { label: 'Practical location (atmospheric)', effect: { quality: 5, cost: 0.04 }, who: ['director', 'producer'] },
+        { label: 'Soundstage (controlled, cheap)', effect: { quality: -1, cost: -0.02 }, who: ['director', 'producer'] },
+        { label: 'Hybrid — scout for a third option', effect: { quality: 2, cost: 0.015 }, who: ['producer', 'director'] },
+      ],
+    },
+    {
+      id: 'table_read', headline: 'First table read with the cast',
+      flavor: 'The whole cast around a table reading every page out loud. Some scenes sing. Others fall flat.',
+      choices: [
+        { label: 'Mark the dead scenes for rewrite', effect: { quality: 4, cost: 0 }, who: ['writer', 'director'] },
+        { label: 'Trust the page — adjust on the day', effect: { quality: 1, cost: 0 }, who: ['director', 'actor'] },
+        { label: 'Bring in a script doctor', effect: { quality: 5, cost: 0.015 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'dp_choice', headline: 'Director of Photography choice',
+      flavor: 'Two DPs available: a veteran with a Best Cinematography nom, and a hungry up-and-comer asking half the rate.',
+      choices: [
+        { label: 'Hire the veteran', effect: { quality: 5, cost: 0.025 }, who: ['director', 'producer'] },
+        { label: 'Bet on the up-and-comer', effect: { quality: randInt(-2, 6), cost: 0 }, who: ['director'] },
+        { label: 'Producer picks based on reel', effect: { quality: 3, cost: 0.01 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'union_paperwork', headline: 'Union paperwork is overdue',
+      flavor: 'SAG and DGA notices are sitting on someone\'s desk. The line producer is panicking.',
+      choices: [
+        { label: 'Hire a line producer to clean up', effect: { quality: 1, cost: 0.015 }, who: ['producer'] },
+        { label: 'You handle it personally (week of work)', effect: { quality: 0, cost: 0, energy: -15 }, who: ['producer'] },
+        { label: 'Push the start date back a week', effect: { quality: 1, cost: 0.02 }, who: ['producer', 'director'] },
+      ],
+    },
+    {
+      id: 'wardrobe_design', headline: 'Costume designer presents looks',
+      flavor: 'The costume designer has three concepts. Each says something different about the picture.',
+      choices: [
+        { label: 'Period-accurate and ornate', effect: { quality: 4, cost: 0.02 }, who: ['director', 'producer'] },
+        { label: 'Stylized and bold', effect: { quality: 5, cost: 0.025, marketing: 0.05 }, who: ['director'] },
+        { label: 'Naturalistic — let it disappear', effect: { quality: 2, cost: 0 }, who: ['director'] },
+      ],
+    },
+    {
+      id: 'studio_notes_pre', headline: 'Studio sends notes on the script',
+      flavor: 'Marketing wants a more "commercial" third act. Notes are 14 pages long.',
+      choices: [
+        { label: 'Address the notes, push back diplomatically', effect: { quality: 2, cost: 0 }, who: ['writer', 'producer', 'director'] },
+        { label: 'Accept all notes (they sign the checks)', effect: { quality: -3, marketing: 0.08, cost: 0 }, who: ['writer', 'producer'] },
+        { label: 'Refuse — die on this hill', effect: { quality: 4, marketing: -0.05, cost: 0 }, who: ['writer', 'director'] },
+      ],
+    },
+    {
+      id: 'rehearsal_block', headline: 'Two weeks of rehearsal proposed',
+      flavor: 'Director wants a full rehearsal block before cameras. Producer is eyeing the schedule.',
+      choices: [
+        { label: 'Run the rehearsals (worth it)', effect: { quality: 5, cost: 0.02 }, who: ['director', 'actor'] },
+        { label: 'Half-week table work only', effect: { quality: 2, cost: 0 }, who: ['producer', 'director'] },
+        { label: 'Skip — discover it on set', effect: { quality: -1, cost: 0 }, who: ['director', 'producer'] },
+      ],
+    },
+  ],
+
+  // ---- FILMING (6-9 weeks of principal photography) ----
+  filming: [
     {
       id: 'overrun', headline: 'Schedule is slipping',
       flavor: 'Shoot days are running long. The producer wants to cut a scene.',
@@ -7644,10 +7854,302 @@ function makeFilmingEvents(production) {
         { label: 'Cut the stunt', effect: { quality: -2, cost: 0 }, who: ['director', 'producer'] },
       ],
     },
-  ];
-  // Shuffle and take 3-4
+    {
+      id: 'dailies_review', headline: 'Dailies look off',
+      flavor: 'The footage from week two is flatter than expected. The DP is defensive.',
+      choices: [
+        { label: 'Push for more lighting setups', effect: { quality: 4, cost: 0.02 }, who: ['director'] },
+        { label: 'Trust the look — fix in post', effect: { quality: -1, cost: 0 }, who: ['director', 'producer'] },
+        { label: 'Replace the DP mid-shoot (drastic)', effect: { quality: 2, cost: 0.05 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'extras_shortage', headline: 'Crowd scene short on extras',
+      flavor: 'The crowd scene is supposed to be 200 people. Casting could only get 60.',
+      choices: [
+        { label: 'Pay overtime to dress more extras', effect: { quality: 1, cost: 0.025 }, who: ['producer'] },
+        { label: 'Reblock the scene tighter', effect: { quality: -1, cost: 0 }, who: ['director'] },
+        { label: 'Add VFX crowd in post', effect: { quality: 0, cost: 0.04 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'craft_services', headline: 'Crew morale is dropping',
+      flavor: 'Long hours, bad food, no breaks. The grip department is grumbling.',
+      choices: [
+        { label: 'Bring in better catering, paid day off', effect: { quality: 2, cost: 0.015 }, who: ['producer'] },
+        { label: 'Cast/director thanks them personally', effect: { quality: 1, cost: 0, energy: -5 }, who: ['actor', 'director'] },
+        { label: 'Power through — we\'re behind', effect: { quality: -2, cost: 0 }, who: ['producer', 'director'] },
+      ],
+    },
+    {
+      id: 'unscripted_moment', headline: 'Improvised moment captures something true',
+      flavor: 'An unscripted exchange between two actors landed perfectly. Nobody planned it.',
+      choices: [
+        { label: 'Build the scene around it', effect: { quality: 5, cost: 0.005 }, who: ['director', 'writer'] },
+        { label: 'Save it for the trailer', effect: { quality: 2, marketing: 0.06, cost: 0 }, who: ['director', 'producer'] },
+      ],
+    },
+  ],
+
+  // ---- POST-PRODUCTION (4-5 weeks: editor's cut, score, color, sound, picture lock) ----
+  postprod: [
+    {
+      id: 'editors_cut', headline: 'First editor\'s cut comes in',
+      flavor: 'Three hours and ten minutes. The editor is proud. The producer is sweating.',
+      choices: [
+        { label: 'Tight commercial trim (under 2hr)', effect: { quality: 1, marketing: 0.04 }, who: ['director', 'producer'] },
+        { label: 'Director\'s preferred length', effect: { quality: 5, marketing: -0.04 }, who: ['director'] },
+        { label: 'Aggressive structural rewrite in edit', effect: { quality: randInt(-2, 7), cost: 0.01 }, who: ['director', 'producer'] },
+      ],
+    },
+    {
+      id: 'composer', headline: 'Composer delivers temp score',
+      flavor: 'The temp track works. The original score is more ambitious — and the composer wants more recording days.',
+      choices: [
+        { label: 'Approve the bigger score', effect: { quality: 4, cost: 0.025 }, who: ['director', 'producer'] },
+        { label: 'Stay close to the temp', effect: { quality: 1, cost: 0 }, who: ['director', 'producer'] },
+        { label: 'License existing tracks instead', effect: { quality: 2, cost: 0.015, marketing: 0.04 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'color_grade', headline: 'Color grading session',
+      flavor: 'The colorist offers a bold high-contrast look or a naturalistic one. Different films emerge.',
+      choices: [
+        { label: 'Bold and stylized', effect: { quality: 4, marketing: 0.02 }, who: ['director'] },
+        { label: 'Naturalistic and timeless', effect: { quality: 3, cost: 0 }, who: ['director'] },
+        { label: 'Let the colorist run with it', effect: { quality: 2, cost: 0 }, who: ['director', 'producer'] },
+      ],
+    },
+    {
+      id: 'sound_mix', headline: 'Sound mix dispute',
+      flavor: 'Music vs. dialogue balance is contentious. The composer wants the score loud. The director wants the words clear.',
+      choices: [
+        { label: 'Score-forward mix', effect: { quality: 3, marketing: 0.03 }, who: ['director'] },
+        { label: 'Dialogue-clear mix', effect: { quality: 4, cost: 0 }, who: ['director'] },
+        { label: 'Two mixes for theatrical and home', effect: { quality: 4, cost: 0.015 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'mpaa', headline: 'MPAA rating returns',
+      flavor: 'You expected PG-13. They came back R. The producer wants cuts to bring it back.',
+      choices: [
+        { label: 'Cut for PG-13 (wider audience)', effect: { quality: -2, marketing: 0.10 }, who: ['director', 'producer'] },
+        { label: 'Keep the R, own it', effect: { quality: 3, marketing: -0.06 }, who: ['director'] },
+        { label: 'Appeal the rating', effect: { quality: 1, cost: 0.005 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'vfx_review', headline: 'VFX shots come back',
+      flavor: 'Half the shots look great. A handful are unfinished and obvious. Vendor is asking for more time and money.',
+      choices: [
+        { label: 'Pay for the extra polish', effect: { quality: 4, cost: 0.025 }, who: ['producer'] },
+        { label: 'Cut around the bad shots', effect: { quality: -1, cost: 0 }, who: ['director'] },
+        { label: 'Switch to a backup vendor (drastic)', effect: { quality: 2, cost: 0.04 }, who: ['producer'] },
+      ],
+    },
+    {
+      id: 'adr_session', headline: 'ADR session needed',
+      flavor: 'Several lines need re-recording. The lead actor is mid-shoot on another picture and is hard to schedule.',
+      choices: [
+        { label: 'Fly the actor in for a half-day', effect: { quality: 3, cost: 0.01 }, who: ['producer'] },
+        { label: 'Use voice double for background lines', effect: { quality: -1, cost: 0 }, who: ['director', 'producer'] },
+        { label: 'Cut the troubled scene entirely', effect: { quality: -2, cost: 0 }, who: ['director'] },
+      ],
+    },
+    {
+      id: 'preview_word', headline: 'Word leaks from a friends-and-family screening',
+      flavor: 'Someone at a private screening tweeted before tweets existed — a trade column has details.',
+      choices: [
+        { label: 'Embrace the buzz, lean in', effect: { marketing: 0.08, fame: 1 }, who: ['producer', 'actor'] },
+        { label: 'Issue a denial, sue the leaker', effect: { quality: 0, cost: 0.005, marketing: -0.02 }, who: ['producer'] },
+        { label: 'Stay silent and let it die', effect: { quality: 1, cost: 0 }, who: ['producer', 'director'] },
+      ],
+    },
+  ],
+
+  // ---- MARKETING (3-5 weeks of escalating campaign beats) ----
+  marketing: [
+    {
+      id: 'teaser_trailer', headline: 'Teaser trailer cut for theatrical',
+      flavor: 'Marketing wants the teaser to drop with a tentpole release. The cut is good but doesn\'t reveal much.',
+      choices: [
+        { label: 'Mysterious — show almost nothing', effect: { marketing: 0.06 }, who: ['director', 'producer'] },
+        { label: 'Show the spectacle', effect: { marketing: 0.10 }, who: ['producer'] },
+        { label: 'Lead with the lead actor', effect: { marketing: 0.08, fame: 2 }, who: ['actor', 'producer'] },
+      ],
+    },
+    {
+      id: 'full_trailer', headline: 'Full trailer launches',
+      flavor: 'The 2:30 trailer has to do all the work. Reactions online are mixed.',
+      choices: [
+        { label: 'Funny / heartfelt cut', effect: { marketing: 0.10 }, who: ['producer', 'director'] },
+        { label: 'Action-forward cut', effect: { marketing: 0.12 }, who: ['producer'] },
+        { label: 'Genre-bending mystery cut', effect: { marketing: randInt(0, 18) / 100 }, who: ['director', 'producer'] },
+      ],
+    },
+    {
+      id: 'press_junket', headline: 'Press junket weekend',
+      flavor: 'Two days, sixty interviews, every regional outlet. The lead is exhausted by hour four.',
+      choices: [
+        { label: 'Power through every interview', effect: { marketing: 0.10, fame: 3, energy: -20 }, who: ['actor', 'director'] },
+        { label: 'Standard charm, conserve energy', effect: { marketing: 0.06, fame: 2, energy: -8 }, who: ['actor', 'director'] },
+        { label: 'Pull out — it\'s the studio\'s job', effect: { marketing: -0.05, fame: -1 }, who: ['actor'] },
+      ],
+    },
+    {
+      id: 'late_night', headline: 'Late-night booking opens up',
+      flavor: 'Carson\'s booker called. There\'s a Wednesday slot a week before release.',
+      choices: [
+        { label: 'Take the slot — go big', effect: { marketing: 0.12, fame: 4, energy: -10 }, who: ['actor', 'director'] },
+        { label: 'Send another cast member instead', effect: { marketing: 0.07, fame: 1 }, who: ['producer', 'actor'] },
+        { label: 'Pass — wrong fit', effect: { marketing: -0.02 }, who: ['actor', 'producer'] },
+      ],
+    },
+    {
+      id: 'magazine_cover', headline: 'Magazine cover offer',
+      flavor: 'Vanity Fair wants the lead actor for a profile. It will run two weeks before release.',
+      choices: [
+        { label: 'Do the cover — full access piece', effect: { marketing: 0.10, fame: 5, energy: -10 }, who: ['actor'] },
+        { label: 'Cover only, no interview', effect: { marketing: 0.05, fame: 2 }, who: ['actor'] },
+        { label: 'Decline — save mystique', effect: { marketing: -0.03, fame: 1 }, who: ['actor'] },
+      ],
+    },
+    {
+      id: 'premiere_event', headline: 'Premiere is set',
+      flavor: 'Red carpet, klieg lights, the works. The studio asks how big you want to go.',
+      choices: [
+        { label: 'A-list spectacle ($$$)', effect: { marketing: 0.12, fame: 5, cost: 0.015 }, who: ['producer', 'actor'] },
+        { label: 'Tasteful industry premiere', effect: { marketing: 0.06, fame: 2 }, who: ['producer', 'director'] },
+        { label: 'Skip premiere, festival debut instead', effect: { marketing: 0.04, quality: 2 }, who: ['director', 'producer'] },
+      ],
+    },
+    {
+      id: 'tracking', headline: 'Opening weekend tracking comes in',
+      flavor: 'Tracking is soft. Marketing wants a last-minute push. It\'s your money to spend.',
+      choices: [
+        { label: 'Spend $1M on TV spots', effect: { marketing: 0.15, marketingBudget: 1_000_000 }, who: ['producer'] },
+        { label: 'Spend $250K on radio + outdoor', effect: { marketing: 0.07, marketingBudget: 250_000 }, who: ['producer'] },
+        { label: 'Hold the line — trust the campaign', effect: { marketing: 0 }, who: ['producer', 'director'] },
+      ],
+    },
+    {
+      id: 'controversy', headline: 'A piece of marketing draws backlash',
+      flavor: 'A poster image / quote / clip is being read as offensive online. Studio wants a response.',
+      choices: [
+        { label: 'Apologize, pull the asset', effect: { marketing: -0.04, fame: -1 }, who: ['producer'] },
+        { label: 'Stand by it — controversy sells', effect: { marketing: 0.06, fame: -2 }, who: ['director', 'producer'] },
+        { label: 'Quietly replace, no comment', effect: { marketing: 0 }, who: ['producer'] },
+      ],
+    },
+  ],
+};
+
+const PHASE_EVENT_COUNTS = {
+  preprod: [4, 5],
+  filming: [6, 9],
+  postprod: [4, 5],
+  marketing: [3, 5],
+};
+
+function makePhaseEvents(phase) {
+  const pool = PHASE_EVENT_POOLS[phase] || [];
+  const [min, max] = PHASE_EVENT_COUNTS[phase] || [3, 5];
   const shuffled = pool.slice().sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, randInt(3, 4));
+  return shuffled.slice(0, randInt(min, max));
+}
+
+// Backwards-compat alias used by some existing call sites; new code should use
+// makePhaseEvents('filming') directly.
+function makeFilmingEvents() {
+  return makePhaseEvents('filming');
+}
+
+// Pure helper: advance a production through `weeks` event resolutions, with
+// NPCs auto-picking each choice. Used for background productions ticking
+// while the player is doing other things. Returns:
+//   { prod: updatedProd, weeksConsumed, readyToRelease: boolean }
+// The caller is responsible for releasing films that become ready.
+//
+// Pull-back triggers: when a player-wrapped production transitions into post
+// or marketing, the tick HALTS and sets `pullBackPending` so the hub can
+// surface a "schedule ADR" or "start press tour" action. Auto-progression
+// resumes once the player resolves it (or skips it).
+function tickProductionEvents(originalProd, weeks) {
+  let prod = { ...originalProd };
+  let weeksConsumed = 0;
+  let readyToRelease = false;
+  const phaseOrder = ['preprod', 'filming', 'postprod', 'marketing', 'release'];
+
+  // If a pull-back is already pending, don't tick at all — wait for the player.
+  if (prod.pullBackPending) return { prod, weeksConsumed: 0, readyToRelease: false };
+
+  while (weeksConsumed < weeks) {
+    if (prod.phase === 'release') {
+      readyToRelease = true;
+      break;
+    }
+    const phaseState = prod[prod.phase];
+    if (!phaseState || !Array.isArray(phaseState.events)) break;
+
+    const nextEventIdx = phaseState.currentEventIdx || 0;
+    if (nextEventIdx < phaseState.events.length) {
+      // Auto-resolve the next event
+      const event = phaseState.events[nextEventIdx];
+      const npcChoices = event.choices.filter(c => c.who.length > 0);
+      const choice = pick(npcChoices.length ? npcChoices : event.choices);
+      const newMods = { ...prod.mods };
+      const hellMult = prod.productionHell ? 2 : 1;
+      if (choice.effect.quality) newMods.qualityMod += choice.effect.quality;
+      if (choice.effect.cost) newMods.costOverrun += Math.round(prod.proj.budget * choice.effect.cost * hellMult);
+      if (choice.effect.marketing) newMods.marketingMod += choice.effect.marketing;
+      // Note: we deliberately ignore `energy` and `fame` effects on background
+      // productions — those are player-side (the player isn't on set, so no
+      // energy drain and no fame bump). marketingBudget is also skipped (the
+      // player isn't writing those checks personally for background films).
+
+      prod = {
+        ...prod,
+        mods: newMods,
+        [prod.phase]: {
+          ...phaseState,
+          currentEventIdx: nextEventIdx + 1,
+          weeksElapsed: (phaseState.weeksElapsed || 0) + 1,
+          resolutions: [...(phaseState.resolutions || []), { idx: nextEventIdx, choiceLabel: choice.label, auto: true }],
+        },
+      };
+      weeksConsumed += 1;
+    } else {
+      // Phase done — transition to next. No week cost for the transition itself.
+      const idx = phaseOrder.indexOf(prod.phase);
+      if (idx < 0 || idx >= phaseOrder.length - 1) {
+        readyToRelease = true;
+        break;
+      }
+      const nextPhase = phaseOrder[idx + 1];
+      prod = { ...prod, phase: nextPhase };
+
+      // Pull-back triggers: if the player wrapped early on this picture and we
+      // just transitioned into post or marketing, halt so they can decide
+      // whether to commit time (ADR / press tour) or skip it.
+      if (prod.playerWrapped && (prod.proj?.playerRoles || []).includes('actor')) {
+        if (nextPhase === 'postprod' && !prod.adrResolved) {
+          prod = { ...prod, pullBackPending: 'adr' };
+          break;
+        }
+        if (nextPhase === 'marketing' && !prod.pressTourResolved) {
+          prod = { ...prod, pullBackPending: 'press' };
+          break;
+        }
+      }
+
+      if (prod.phase === 'release') {
+        readyToRelease = true;
+        break;
+      }
+    }
+  }
+
+  return { prod, weeksConsumed, readyToRelease };
 }
 
 function ProductionHUD({ production }) {
@@ -7699,18 +8201,21 @@ function ProductionHUD({ production }) {
 }
 
 function PreProductionScreen({ production, player, onAdvance, onChoice }) {
-  const { proj } = production;
+  const { proj, preprod } = production;
   const isWriter = proj.playerRoles.includes('writer');
   const isProducer = proj.playerRoles.includes('producer');
   const isDirector = proj.playerRoles.includes('director');
   const isActor = proj.playerRoles.includes('actor');
 
   const buffs = ownedBuffs(player);
+  const eventsDone = (preprod.currentEventIdx || 0) >= preprod.events.length;
 
-  const [scriptPolished, setScriptPolished] = useState(production.preprod?.scriptPolished || false);
-  const [tone, setTone] = useState(production.preprod?.tone || null);
-  const [prepLevel, setPrepLevel] = useState(production.preprod?.prepLevel || null);
-  const [writersRoomApplied, setWritersRoomApplied] = useState(production.preprod?.writersRoomApplied || false);
+  // Static "intent" choices — set the film's overall approach. These commit
+  // instantly (no week cost) and stack with the weekly event stream below.
+  const [scriptPolished, setScriptPolished] = useState(preprod.scriptPolished || false);
+  const [tone, setTone] = useState(preprod.tone || null);
+  const [prepLevel, setPrepLevel] = useState(preprod.prepLevel || null);
+  const [writersRoomApplied, setWritersRoomApplied] = useState(preprod.writersRoomApplied || false);
 
   // Auto-apply writers' room polish once (if player has it and hasn't yet)
   useEffect(() => {
@@ -7724,7 +8229,6 @@ function PreProductionScreen({ production, player, onAdvance, onChoice }) {
 
   const polishScript = () => {
     if (scriptPolished) return;
-    // Writer skill check: +5 to +10 quality if good roll
     const writerSkill = proj.writerSkill || 30;
     const bonus = Math.max(2, Math.round(writerSkill / 12 + randInt(-2, 4)));
     onChoice({ quality: bonus, energy: -8 });
@@ -7747,10 +8251,11 @@ function PreProductionScreen({ production, player, onAdvance, onChoice }) {
     <div className="ht-fade-in">
       <Panel title="Pre-Production" subtitle="Before a single frame is shot">
         <p className="ht-text-dim" style={{ marginTop: 0 }}>
-          Pre-production is where movies are won or lost on paper. Polish what you can. Make your choices.
+          Pre-production sets the picture's DNA — script polish, casting, locations, table reads.
+          Set your approach, then walk through the weeks.
         </p>
 
-        {/* Writer phase */}
+        {/* ===== Static "intent" choices — the film's strategic setup ===== */}
         <div className="ht-phase-block">
           <div className="ht-phase-block-title">✒️ Script</div>
           {buffs.freeScriptPolish && (
@@ -7762,79 +8267,53 @@ function PreProductionScreen({ production, player, onAdvance, onChoice }) {
             <>
               <p>You can take one more pass at the script before cameras roll.</p>
               <button className="ht-btn ht-btn-sm" disabled={scriptPolished} onClick={polishScript}>
-                {scriptPolished ? '✓ Script polished' : 'Polish the script (1 week)'}
+                {scriptPolished ? '✓ Script polished' : 'Polish the script'}
               </button>
             </>
           ) : (
             <p className="ht-text-dim">
-              {proj.crew.writer.name} is doing a final polish on the script. You'll see the pages soon.
+              {proj.crew.writer.name} is doing a final polish on the script.
             </p>
           )}
         </div>
 
-        {/* Director phase: tone/style choice */}
         <div className="ht-phase-block">
           <div className="ht-phase-block-title">🎬 Visual Tone</div>
           {isDirector ? (
             <>
-              <p>Set the look of the picture. The director's choice — though it has trade-offs.</p>
+              <p>Set the look of the picture.</p>
               <div className="ht-row">
-                <button
-                  className={`ht-btn ht-btn-sm ${tone === 'Stylish' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!tone}
-                  onClick={() => chooseTone('Stylish', { quality: 4, cost: 0.03 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${tone === 'Stylish' ? 'ht-btn-primary' : ''}`} disabled={!!tone} onClick={() => chooseTone('Stylish', { quality: 4, cost: 0.03 })}>
                   Stylish & ambitious (+quality, +cost)
                 </button>
-                <button
-                  className={`ht-btn ht-btn-sm ${tone === 'Conventional' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!tone}
-                  onClick={() => chooseTone('Conventional', { quality: 1, cost: 0 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${tone === 'Conventional' ? 'ht-btn-primary' : ''}`} disabled={!!tone} onClick={() => chooseTone('Conventional', { quality: 1, cost: 0 })}>
                   Conventional (safe)
                 </button>
-                <button
-                  className={`ht-btn ht-btn-sm ${tone === 'Lean' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!tone}
-                  onClick={() => chooseTone('Lean', { quality: -2, cost: -0.04 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${tone === 'Lean' ? 'ht-btn-primary' : ''}`} disabled={!!tone} onClick={() => chooseTone('Lean', { quality: -2, cost: -0.04 })}>
                   Lean & fast (under budget)
                 </button>
               </div>
             </>
           ) : (
             <p className="ht-text-dim">
-              Director {proj.crew.director.name} is settling on the visual style. {tone ? `Approach chosen: ${tone}.` : ''}
+              Director {proj.crew.director.name} is settling on the visual style. {tone ? `Approach: ${tone}.` : ''}
             </p>
           )}
         </div>
 
-        {/* Actor phase: prep level */}
         <div className="ht-phase-block">
           <div className="ht-phase-block-title">🎭 Performance Prep</div>
           {isActor ? (
             <>
               <p>How much do you prepare for this part?</p>
               <div className="ht-row">
-                <button
-                  className={`ht-btn ht-btn-sm ${prepLevel === 'Method' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!prepLevel}
-                  onClick={() => choosePrep('Method', { quality: 5, energy: -25 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${prepLevel === 'Method' ? 'ht-btn-primary' : ''}`} disabled={!!prepLevel} onClick={() => choosePrep('Method', { quality: 5, energy: -25 })}>
                   Full method immersion (+quality, drains energy)
                 </button>
-                <button
-                  className={`ht-btn ht-btn-sm ${prepLevel === 'Standard' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!prepLevel}
-                  onClick={() => choosePrep('Standard', { quality: 2, energy: -10 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${prepLevel === 'Standard' ? 'ht-btn-primary' : ''}`} disabled={!!prepLevel} onClick={() => choosePrep('Standard', { quality: 2, energy: -10 })}>
                   Standard prep
                 </button>
-                <button
-                  className={`ht-btn ht-btn-sm ${prepLevel === 'Wing' ? 'ht-btn-primary' : ''}`}
-                  disabled={!!prepLevel}
-                  onClick={() => choosePrep('Wing', { quality: -2, energy: 0 })}
-                >
+                <button className={`ht-btn ht-btn-sm ${prepLevel === 'Wing' ? 'ht-btn-primary' : ''}`} disabled={!!prepLevel} onClick={() => choosePrep('Wing', { quality: -2, energy: 0 })}>
                   Wing it
                 </button>
               </div>
@@ -7846,66 +8325,75 @@ function PreProductionScreen({ production, player, onAdvance, onChoice }) {
           )}
         </div>
 
-        {/* Producer phase: scheduling */}
         {isProducer && (
           <div className="ht-phase-block">
             <div className="ht-phase-block-title">💼 Schedule & Budget Locks</div>
             <p>You're the producer. You can build contingency or run tight.</p>
             <div className="ht-row">
-              <button
-                className="ht-btn ht-btn-sm"
-                onClick={() => onChoice({ cost: -0.02, qualityMod: 0 })}
-              >
+              <button className="ht-btn ht-btn-sm" onClick={() => onChoice({ cost: -0.02 })}>
                 Build contingency (-2% cost risk)
               </button>
-              <button
-                className="ht-btn ht-btn-sm"
-                onClick={() => onChoice({ cost: 0.03, quality: 2 })}
-              >
+              <button className="ht-btn ht-btn-sm" onClick={() => onChoice({ cost: 0.03, quality: 2 })}>
                 Splurge on locations (+quality, +cost)
               </button>
             </div>
           </div>
         )}
 
-        <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-          <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
-            Begin Principal Photography →
-          </button>
-        </div>
+        {/* ===== Weekly event stream — the time-consuming pre-prod arc ===== */}
+        {!eventsDone ? (
+          <div style={{ marginTop: 20 }}>
+            <div className="ht-label">Pre-Production Diary</div>
+            <PhaseEventStream
+              phaseState={preprod}
+              proj={proj}
+              onChoice={onChoice}
+              weekLabel="Week"
+              historyLabel="Earlier in pre-production:"
+            />
+          </div>
+        ) : (
+          <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
+            <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
+              Begin Principal Photography →
+            </button>
+          </div>
+        )}
       </Panel>
     </div>
   );
 }
 
-function FilmingScreen({ production, player, onChoice, onAdvance }) {
-  const { proj, filming } = production;
-  const events = filming.events;
-  const currentIdx = filming.currentEventIdx;
+// Reusable event stream for any production phase. Renders the current event
+// with role-gated choices and auto-resolves when the player isn't in the
+// room (NPC picks). Returns null when the phase's event queue is exhausted —
+// the parent screen renders the "advance to next phase" button.
+function PhaseEventStream({ phaseState, proj, onChoice, weekLabel, historyLabel }) {
+  const events = phaseState.events || [];
+  const currentIdx = phaseState.currentEventIdx || 0;
   const currentEvent = events[currentIdx];
   const done = currentIdx >= events.length;
 
-  // Decide if player is the one making decisions on this event
-  // Players who hold any of the "who" roles can decide
-  const playerDeciding = !done && currentEvent.choices.some(c =>
+  const playerDeciding = !done && currentEvent && currentEvent.choices.some(c =>
     c.who.some(role => proj.playerRoles.includes(role))
   );
 
   const handleChoice = (choice) => {
+    const passthrough = ['quality', 'cost', 'marketing', 'energy', 'fame', 'marketingBudget', 'fycSpend'];
     const effect = {};
-    if (choice.effect.quality) effect.quality = choice.effect.quality;
-    if (choice.effect.cost) effect.cost = choice.effect.cost; // as fraction of budget
-    if (choice.effect.marketing) effect.marketing = choice.effect.marketing;
+    for (const key of passthrough) {
+      if (choice.effect[key] !== undefined) effect[key] = choice.effect[key];
+    }
     onChoice({
       ...effect,
       eventResolution: { idx: currentIdx, choiceLabel: choice.label },
     });
   };
 
-  // Auto-resolve if player isn't involved (NPC decides)
+  // Auto-resolve when the player has no role in any choice. The crew picks
+  // and the production keeps moving — same pacing as a player-led week.
   useEffect(() => {
     if (!done && !playerDeciding && currentEvent) {
-      // NPC picks based on which one their role can take
       const npcChoices = currentEvent.choices.filter(c => c.who.length > 0);
       const choice = pick(npcChoices.length ? npcChoices : currentEvent.choices);
       const id = setTimeout(() => handleChoice(choice), 800);
@@ -7914,14 +8402,81 @@ function FilmingScreen({ production, player, onChoice, onAdvance }) {
     // eslint-disable-next-line
   }, [currentIdx, done]);
 
+  if (done) return null;
+
+  return (
+    <div className="ht-event-card">
+      {weekLabel && (
+        <div className="ht-filming-day">
+          {weekLabel} {(phaseState.weeksElapsed || 0) + 1} of {events.length}
+        </div>
+      )}
+
+      <div className="ht-event-headline">{currentEvent.headline}</div>
+      <p style={{ fontStyle: 'italic' }}>{currentEvent.flavor}</p>
+
+      {playerDeciding ? (
+        <>
+          <div className="ht-label" style={{ marginTop: 10 }}>Your call:</div>
+          <div className="ht-row">
+            {currentEvent.choices.map((c, i) => {
+              const canChoose = c.who.some(r => proj.playerRoles.includes(r));
+              return (
+                <button
+                  key={i}
+                  className="ht-btn ht-btn-sm"
+                  disabled={!canChoose}
+                  onClick={() => handleChoice(c)}
+                  title={!canChoose ? `Only ${c.who.map(r => ROLE_LABELS[r]).join('/')} can choose this` : ''}
+                >
+                  {c.label}
+                  {!canChoose && <span style={{ fontSize: '0.7rem', marginLeft: 4 }}>🔒</span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <p className="ht-text-dim">
+          You're not in the room for this decision. The crew is handling it...
+        </p>
+      )}
+
+      {(phaseState.resolutions || []).length > 0 && (
+        <div style={{ marginTop: 16, fontSize: '0.85rem' }}>
+          <div className="ht-label">{historyLabel || 'Earlier:'}</div>
+          {phaseState.resolutions.map((r, i) => (
+            <div key={i} style={{ padding: '3px 0', color: 'var(--cream-dim)' }}>
+              • {events[r.idx].headline} → <em>{r.choiceLabel}</em>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilmingScreen({ production, player, onChoice, onAdvance, onWrapAndBackground }) {
+  const { proj, filming } = production;
+  const eventsDone = (filming.currentEventIdx || 0) >= filming.events.length;
+
+  // Actor-only wrap mechanic: in real productions, an actor's part typically
+  // shoots in the first 60–70% of the filming schedule, after which they're
+  // free to take other work. If the player is acting (and not also directing
+  // or producing — those roles must stay through wrap), they can hit "your
+  // scenes wrapped" once they're past the 60% mark and hand the rest of the
+  // shoot off to the crew.
+  const playerRoles = proj.playerRoles || [];
+  const isActor = playerRoles.includes('actor');
+  const isCommittedRole = playerRoles.includes('director') || playerRoles.includes('producer');
+  const wrapEligibleAt = Math.ceil(filming.events.length * 0.6);
+  const actorPartWrapped = (filming.currentEventIdx || 0) >= wrapEligibleAt;
+  const canWrap = isActor && !isCommittedRole && actorPartWrapped && !eventsDone && onWrapAndBackground;
+
   return (
     <div className="ht-fade-in">
       <Panel title="Principal Photography" subtitle="The cameras are rolling">
-        <div className="ht-filming-day">
-          Week {filming.weeksShot + 1} of {events.length} on set
-        </div>
-
-        {done ? (
+        {eventsDone ? (
           <>
             <p>Picture's in the can. Time to head to the editing room.</p>
             <div className="ht-row" style={{ justifyContent: 'flex-end' }}>
@@ -7931,49 +8486,33 @@ function FilmingScreen({ production, player, onChoice, onAdvance }) {
             </div>
           </>
         ) : (
-          <div className="ht-event-card">
-            <div className="ht-event-headline">{currentEvent.headline}</div>
-            <p style={{ fontStyle: 'italic' }}>{currentEvent.flavor}</p>
-
-            {playerDeciding ? (
-              <>
-                <div className="ht-label" style={{ marginTop: 10 }}>Your call:</div>
-                <div className="ht-row">
-                  {currentEvent.choices.map((c, i) => {
-                    const canChoose = c.who.some(r => proj.playerRoles.includes(r));
-                    return (
-                      <button
-                        key={i}
-                        className="ht-btn ht-btn-sm"
-                        disabled={!canChoose}
-                        onClick={() => handleChoice(c)}
-                        title={!canChoose ? `Only ${c.who.map(r => ROLE_LABELS[r]).join('/')} can choose this` : ''}
-                      >
-                        {c.label}
-                        {!canChoose && <span style={{ fontSize: '0.7rem', marginLeft: 4 }}>🔒</span>}
-                      </button>
-                    );
-                  })}
+          <>
+            <PhaseEventStream
+              phaseState={filming}
+              proj={proj}
+              onChoice={onChoice}
+              weekLabel="Week"
+              historyLabel="Earlier on set:"
+            />
+            {canWrap && (
+              <div className="ht-phase-block" style={{ marginTop: 16, borderLeftColor: 'var(--gold-bright)' }}>
+                <div className="ht-phase-block-title" style={{ color: 'var(--gold-bright)' }}>
+                  🎬 Your scenes are wrapping
                 </div>
-              </>
-            ) : (
-              <p className="ht-text-dim">
-                You're not in the room for this decision. The crew is handling it...
-              </p>
-            )}
-
-            {/* History of resolved events */}
-            {filming.resolutions.length > 0 && (
-              <div style={{ marginTop: 16, fontSize: '0.85rem' }}>
-                <div className="ht-label">Earlier on set:</div>
-                {filming.resolutions.map((r, i) => (
-                  <div key={i} style={{ padding: '3px 0', color: 'var(--cream-dim)' }}>
-                    • {events[r.idx].headline} → <em>{r.choiceLabel}</em>
-                  </div>
-                ))}
+                <p style={{ fontSize: '0.92rem' }}>
+                  Your part on "{proj.title}" is in the can. The crew will finish principal
+                  photography without you. You're free to take other work — the film will
+                  continue through post and marketing in the background, and release on its own.
+                </p>
+                <button
+                  className="ht-btn ht-btn-primary"
+                  onClick={() => onWrapAndBackground(production)}
+                >
+                  Wrap & Move On →
+                </button>
               </div>
             )}
-          </div>
+          </>
         )}
       </Panel>
     </div>
@@ -8021,15 +8560,19 @@ function PostProductionScreen({ production, player, onChoice, onAdvance }) {
     onChoice({ ...effects[style], finalEdit: style });
   };
 
+  const eventsDone = (postprod.currentEventIdx || 0) >= postprod.events.length;
+
   return (
     <div className="ht-fade-in">
       <Panel title="Post-Production" subtitle="Editing, scoring, locking the picture">
         <p className="ht-text-dim" style={{ marginTop: 0 }}>
-          Films are made in the edit. This is where decisions cost money or save the picture.
+          Films are made in the edit. The director's choices over the coming weeks determine
+          whether you have a picture or just footage.
         </p>
 
+        {/* ===== Static "intent" choices ===== */}
         <div className="ht-phase-block">
-          <div className="ht-phase-block-title">🎞️ Final Cut</div>
+          <div className="ht-phase-block-title">🎞️ Final Cut Direction</div>
           {isDirector ? (
             <>
               <p>How do you want to lock the picture?</p>
@@ -8085,11 +8628,25 @@ function PostProductionScreen({ production, player, onChoice, onAdvance }) {
           )}
         </div>
 
-        <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-          <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
-            Hand Off to Marketing →
-          </button>
-        </div>
+        {/* ===== Weekly post-production event stream ===== */}
+        {!eventsDone ? (
+          <div style={{ marginTop: 20 }}>
+            <div className="ht-label">In the Editing Room</div>
+            <PhaseEventStream
+              phaseState={postprod}
+              proj={proj}
+              onChoice={onChoice}
+              weekLabel="Week"
+              historyLabel="Earlier in post:"
+            />
+          </div>
+        ) : (
+          <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
+            <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
+              Hand Off to Marketing →
+            </button>
+          </div>
+        )}
       </Panel>
     </div>
   );
@@ -8338,11 +8895,31 @@ function MarketingScreen({ production, player, onChoice, onAdvance }) {
           )}
         </div>
 
-        <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-          <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
-            Open the Picture →
-          </button>
-        </div>
+        {/* ===== Weekly marketing event stream — campaign beats build over time ===== */}
+        {(() => {
+          const eventsDone = (production.marketing.currentEventIdx || 0) >= production.marketing.events.length;
+          if (eventsDone) {
+            return (
+              <div className="ht-row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
+                <button className="ht-btn ht-btn-primary" onClick={onAdvance}>
+                  Open the Picture →
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div style={{ marginTop: 20 }}>
+              <div className="ht-label">Campaign Calendar</div>
+              <PhaseEventStream
+                phaseState={production.marketing}
+                proj={proj}
+                onChoice={onChoice}
+                weekLabel="Week"
+                historyLabel="Earlier in the campaign:"
+              />
+            </div>
+          );
+        })()}
       </Panel>
     </div>
   );
@@ -10608,19 +11185,63 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
   const [resultProject, setResultProject] = useState(null);
   const [pendingFoundStudio, setPendingFoundStudio] = useState(false);
   const [auditionResult, setAuditionResult] = useState(null); // { audition, outcome }
-  const [production, setProduction] = useState(player.activeProduction || null); // active multi-phase production
-  // Sync production back into player so it survives saves/loads
+  // Phase 3: productions live in player.activeProductions[]. The "foreground"
+  // production — the one the player is currently looking at — is identified by
+  // viewedProductionId. All other productions tick in the background each week.
+  const [viewedProductionId, setViewedProductionId] = useState(() => {
+    // On first mount, prefer any in-progress production from the saved slate;
+    // fall back to the legacy single activeProduction field for one-time migration.
+    const slate = player.activeProductions || [];
+    const inProgress = slate.find(p => p.status === 'inProgress');
+    if (inProgress) return inProgress.id;
+    if (player.activeProduction) {
+      // Migrate the legacy single foreground production into the slate now.
+      const legacy = {
+        ...player.activeProduction,
+        id: player.activeProduction.id || `prod_${Math.random().toString(36).slice(2, 10)}`,
+        status: 'inProgress',
+      };
+      // Defer the state mutation slightly so React doesn't complain
+      setTimeout(() => {
+        setPlayer(p => ({
+          ...p,
+          activeProductions: [...(p.activeProductions || []), legacy],
+          activeProduction: null,
+        }));
+      }, 0);
+      return legacy.id;
+    }
+    return null;
+  });
+
+  // Derived: the production the player is currently viewing (may be undefined)
+  const viewedProduction = useMemo(
+    () => (player.activeProductions || []).find(p => p.id === viewedProductionId) || null,
+    [player.activeProductions, viewedProductionId]
+  );
+
+  // Helper: update a specific production by id within the slate
+  const updateProduction = (id, updater) => {
+    setPlayer(p => ({
+      ...p,
+      activeProductions: (p.activeProductions || []).map(prod =>
+        prod.id === id ? updater(prod) : prod
+      ),
+    }));
+  };
+
+  // Helper: remove a production from the slate (used after release)
+  const removeProduction = (id) => {
+    setPlayer(p => ({
+      ...p,
+      activeProductions: (p.activeProductions || []).filter(prod => prod.id !== id),
+    }));
+  };
+
+  // If we resumed a save with a foreground production, jump straight into the
+  // production view rather than landing on the hub.
   useEffect(() => {
-    setPlayer(p => {
-      if (p.activeProduction === production) return p;
-      // Strip phase callbacks since they're not in production object anyway
-      return { ...p, activeProduction: production };
-    });
-    // eslint-disable-next-line
-  }, [production]);
-  // If on load, the saved player has activeProduction and view should jump to production
-  useEffect(() => {
-    if (production && view === 'hub') {
+    if (viewedProduction && view === 'hub') {
       setView('production');
     }
     // eslint-disable-next-line
@@ -10682,8 +11303,8 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     const lastWeek = last.releaseWeek || 1;
     const weeksSince = (player.year - lastYear) * 52 + (player.week - lastWeek);
     if (weeksSince >= 78) {
-      // Skip if there's an active production — they're already working
-      if (production) return;
+      // Skip if there's any active production in flight — they're already working
+      if ((player.activeProductions || []).length > 0) return;
       setPlayer(p => ({
         ...p,
         comebackState: { reason: 'inactivity', sinceYear: p.year, sinceWeek: p.week, weeksSilent: weeksSince },
@@ -10914,15 +11535,12 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     // Compute burnout state ahead of the setPlayer so we can act on it
     // (we know whether the player WAS already burnt out coming into this tick)
     const wasBurntOut = (player.burnoutWeeks || 0) >= 2;
-    if (wasBurntOut && production) {
-      // Burnout penalty on active production: -3 qualityMod per week tick
-      setProduction(prod => {
-        if (!prod) return prod;
-        return {
-          ...prod,
-          mods: { ...prod.mods, qualityMod: prod.mods.qualityMod - 3 * weeks },
-        };
-      });
+    if (wasBurntOut && viewedProduction) {
+      // Burnout penalty on the foreground production: -3 qualityMod per week tick
+      updateProduction(viewedProduction.id, prod => ({
+        ...prod,
+        mods: { ...prod.mods, qualityMod: prod.mods.qualityMod - 3 * weeks },
+      }));
     }
 
     setPlayer(p => {
@@ -10949,7 +11567,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       // Inactivity decay: if no film is in theaters, no production active, and no film
       // released in the past 26 weeks, fame drifts down. Hollywood forgets fast.
       const hasInTheaters = (p.inTheaters || []).length > 0;
-      const hasActiveProduction = !!p.activeProduction;
+      const hasActiveProduction = (p.activeProductions || []).length > 0;
       const lastReleaseWeeks = (() => {
         if ((p.history || []).length === 0) return Infinity;
         const lastFilm = p.history[p.history.length - 1];
@@ -11060,6 +11678,10 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     // Tick any in-theaters films forward (separate setPlayer for clarity)
     tickInTheaters(weeks);
 
+    // Tick any background productions forward — auto-resolve events, transition
+    // phases, release films that finish marketing.
+    tickBackgroundProductions(weeks);
+
     // Tabloid event chance — rolled per week tick
     maybeTriggerTabloid(weeks);
 
@@ -11098,7 +11720,8 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
         return ageWeeks < 4;
       });
       if (fresh.length >= 3) return { ...p, cameoOffers: fresh }; // cap reached
-      if (production) return { ...p, cameoOffers: fresh }; // no offers during production
+      // Suppress new cameo offers if the player has any production in flight — they're busy
+      if ((p.activeProductions || []).length > 0) return { ...p, cameoOffers: fresh };
       // Find friends
       const friends = Object.values(p.worldNPCs || {}).filter(npc =>
         (npc.friendshipScore || 0) >= 3 && !npc.retired
@@ -12004,70 +12627,81 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       }
     }
 
+    // Each phase now has its own event stream — players walk through a sequence
+    // of decisions one week at a time. The "instant click" model is gone.
+    const makePhaseState = (phase) => ({
+      events: makePhaseEvents(phase),
+      currentEventIdx: 0,
+      weeksElapsed: 0,
+      resolutions: [],
+    });
+
+    const newProductionId = `prod_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const production = {
+      id: newProductionId,
+      status: 'inProgress',
       proj: { ...proj, offer }, // remember whether this is an outside offer
       studioCost,
       phase: 'preprod',
       productionHell,
       mods: { qualityMod: initialQualityMod, marketingMod: 1.0, costOverrun: 0 },
-      preprod: { scriptPolished: false, tone: null, prepLevel: null },
-      filming: {
-        events: makeFilmingEvents({ proj }),
-        currentEventIdx: 0,
-        weeksShot: 0,
-        resolutions: [],
+      preprod: {
+        ...makePhaseState('preprod'),
+        // Static-decision fields (legacy) — still settable but no longer the main mechanic
+        scriptPolished: false, tone: null, prepLevel: null,
       },
-      postprod: { testScreening: null, finalEdit: null, reshootsDone: false },
-      marketing: { budgetBoost: 0, talkshow: false, magazine: false, redcarpet: false, festival: false, interviews: false },
+      filming: makePhaseState('filming'),
+      postprod: {
+        ...makePhaseState('postprod'),
+        testScreening: null, finalEdit: null, reshootsDone: false,
+      },
+      marketing: {
+        ...makePhaseState('marketing'),
+        budgetBoost: 0, talkshow: false, magazine: false, redcarpet: false, festival: false, interviews: false,
+      },
     };
-    setProduction(production);
+    setPlayer(p => ({ ...p, activeProductions: [...(p.activeProductions || []), production] }));
+    setViewedProductionId(newProductionId);
     addLog('Production', `Pre-production begins on "${proj.title}".`);
     setView('production');
     setActiveOffer(null);
   };
 
-  // Apply a choice's effects to the current production
+  // Apply a choice's effects to the currently-viewed production. Event
+  // resolutions route to whichever phase is currently active.
   const applyProductionChoice = (effect) => {
-    setProduction(prod => {
-      if (!prod) return prod;
+    if (!viewedProduction) return;
+    const targetId = viewedProduction.id;
+
+    updateProduction(targetId, prod => {
       const next = { ...prod, mods: { ...prod.mods }, preprod: { ...prod.preprod }, postprod: { ...prod.postprod }, marketing: { ...prod.marketing }, filming: { ...prod.filming } };
 
-      // Quality
       if (effect.quality) next.mods.qualityMod += effect.quality;
-
-      // Cost (as fraction of budget; OR absolute cashSpent)
-      // Production hell doubles cost overruns
       const hellMult = prod.productionHell ? 2 : 1;
       if (effect.cost) next.mods.costOverrun += Math.round(prod.proj.budget * effect.cost * hellMult);
-      if (effect.cashSpent) {
-        // Direct cash out of player's pocket (promo spending) — handled below
-      }
-
-      // Marketing multiplier
       if (effect.marketing) next.mods.marketingMod += effect.marketing;
-
-      // Marketing budget direct boost (producer's call)
       if (effect.marketingBudget) {
         next.marketing.budgetBoost = (next.marketing.budgetBoost || 0) + effect.marketingBudget;
       }
-
-      // For Your Consideration awards campaign (producer's call)
       if (effect.fycSpend) {
         next.marketing.fycSpend = (next.marketing.fycSpend || 0) + effect.fycSpend;
       }
-
-      // Phase-specific flags
       if (effect.eventResolution) {
-        next.filming.resolutions = [...next.filming.resolutions, effect.eventResolution];
-        next.filming.currentEventIdx = prod.filming.currentEventIdx + 1;
-        next.filming.weeksShot = prod.filming.weeksShot + 1;
+        const phaseKey = prod.phase;
+        const phaseState = next[phaseKey];
+        if (phaseState && Array.isArray(phaseState.events)) {
+          next[phaseKey] = {
+            ...phaseState,
+            resolutions: [...(phaseState.resolutions || []), effect.eventResolution],
+            currentEventIdx: (phaseState.currentEventIdx || 0) + 1,
+            weeksElapsed: (phaseState.weeksElapsed || 0) + 1,
+          };
+        }
       }
       if (effect.testScreening) next.postprod.testScreening = effect.testScreening;
       if (effect.finalEdit) next.postprod.finalEdit = effect.finalEdit;
       if (effect.reshootsDone) next.postprod.reshootsDone = true;
       if (effect.promo) next.marketing = { ...next.marketing, ...effect.promo };
-
-      // Festival submission tracking
       if (effect.festivalSubmitted) next.marketing.festivalSubmitted = effect.festivalSubmitted;
       if (effect.festivalAccepted) next.marketing.festivalAccepted = effect.festivalAccepted;
       if (effect.festivalRejected) next.marketing.festivalRejected = effect.festivalRejected;
@@ -12081,7 +12715,6 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       const updates = {};
       if (effect.energy) updates.energy = clamp(p.energy + effect.energy, 0, 100);
       if (effect.fame) {
-        // Publicist multiplies promo fame gains
         const fameAmount = effect.fame * buffs.promoFameMultiplier;
         updates.fame = clamp(p.fame + fameAmount, 0, 100);
         updates.peakFame = Math.max(p.peakFame || 0, updates.fame);
@@ -12091,39 +12724,116 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       return { ...p, ...updates };
     });
 
-    // Filming events also pass a week of in-game time
     if (effect.eventResolution) {
       advanceWeek(1);
     }
   };
 
-  // Advance to next phase
+  // Advance to next phase on the currently-viewed production.
   const advancePhase = () => {
-    if (!production) return;
+    if (!viewedProduction) return;
     const order = ['preprod', 'filming', 'postprod', 'marketing', 'release'];
-    const idx = order.indexOf(production.phase);
+    const idx = order.indexOf(viewedProduction.phase);
     if (idx < 0 || idx >= order.length - 1) return;
     const nextPhase = order[idx + 1];
 
-    // Phase transition side effects (logs, time, release trigger) — outside the updater
     if (nextPhase === 'filming') {
-      addLog('Production', `Principal photography starts on "${production.proj.title}".`);
+      addLog('Production', `Principal photography starts on "${viewedProduction.proj.title}".`);
     } else if (nextPhase === 'postprod') {
-      addLog('Production', `"${production.proj.title}" wraps. Now in post.`);
-      advanceWeek(2);
+      addLog('Production', `"${viewedProduction.proj.title}" wraps. Now in post.`);
     } else if (nextPhase === 'marketing') {
-      addLog('Production', `Picture locked. Marketing campaign for "${production.proj.title}" begins.`);
-      advanceWeek(2);
+      addLog('Production', `Picture locked. Marketing campaign for "${viewedProduction.proj.title}" begins.`);
     } else if (nextPhase === 'release') {
-      // Trigger release flow on next tick
-      setTimeout(() => releaseFilm(), 0);
+      const releasingId = viewedProduction.id;
+      setTimeout(() => releaseFilm(releasingId), 0);
     }
-    setProduction(prod => prod ? { ...prod, phase: nextPhase } : prod);
+    updateProduction(viewedProduction.id, prod => ({ ...prod, phase: nextPhase }));
+  };
+
+  // Actor wraps their part early and hands the production off to the crew. The
+  // production stays in the slate but flips to background — auto-progressing
+  // each week. The player returns to the hub free to take the next job.
+  const wrapAndBackground = (prod) => {
+    if (!prod) return;
+    updateProduction(prod.id, p => ({
+      ...p,
+      status: 'background',
+      playerWrapped: true,
+      backgroundedAt: { year: player.year, week: player.week, phase: p.phase },
+    }));
+    addLog('Production', `🎬 Wrapped your part on "${prod.proj.title}". The crew takes it from here.`);
+    setViewedProductionId(null);
+    setView('hub');
+  };
+
+  // Resolve a background production's pull-back request. ADR happens once in
+  // post; press tour is the marketing kicker. `action` is 'do' or 'skip'.
+  const resolvePullBack = (prodId, action) => {
+    const prod = (player.activeProductions || []).find(p => p.id === prodId);
+    if (!prod || !prod.pullBackPending) return;
+    const kind = prod.pullBackPending;
+
+    if (kind === 'adr') {
+      if (action === 'do') {
+        // 1 week, +2 quality, +1 fame, small energy cost. Player flies in for ADR.
+        updateProduction(prodId, p => ({
+          ...p,
+          mods: { ...p.mods, qualityMod: p.mods.qualityMod + 2 },
+          adrResolved: true,
+          pullBackPending: null,
+        }));
+        setPlayer(p => ({
+          ...p,
+          fame: clamp(p.fame + 1, 0, 100),
+          energy: clamp(p.energy - 5, 0, 100),
+        }));
+        addLog('Production', `🎙 Recorded ADR for "${prod.proj.title}" (+2 quality).`);
+        advanceWeek(1);
+      } else {
+        // Skip: NPC voice double, -1 quality
+        updateProduction(prodId, p => ({
+          ...p,
+          mods: { ...p.mods, qualityMod: p.mods.qualityMod - 1 },
+          adrResolved: true,
+          pullBackPending: null,
+        }));
+        addLog('Production', `Skipped ADR for "${prod.proj.title}" — voice double used (-1 quality).`);
+      }
+    } else if (kind === 'press') {
+      if (action === 'do') {
+        // 4-week press tour: +0.15 marketing, +5 fame, big energy cost
+        updateProduction(prodId, p => ({
+          ...p,
+          mods: { ...p.mods, marketingMod: p.mods.marketingMod + 0.15 },
+          pressTourResolved: true,
+          pullBackPending: null,
+        }));
+        setPlayer(p => ({
+          ...p,
+          fame: clamp(p.fame + 5, 0, 100),
+          peakFame: Math.max(p.peakFame || 0, p.fame + 5),
+          energy: clamp(p.energy - 20, 0, 100),
+        }));
+        addLog('Production', `🎤 Did the press tour for "${prod.proj.title}" — 4 weeks of junkets, late-night, premieres (+marketing, +fame).`);
+        advanceWeek(4);
+      } else {
+        // Skip: campaign loses some steam, -0.05 marketing
+        updateProduction(prodId, p => ({
+          ...p,
+          mods: { ...p.mods, marketingMod: Math.max(0.5, p.mods.marketingMod - 0.05) },
+          pressTourResolved: true,
+          pullBackPending: null,
+        }));
+        addLog('Production', `Skipped press tour for "${prod.proj.title}" — studio rolled with NPC promo (slight marketing hit).`);
+      }
+    }
   };
 
   // Final release — runs simulateMovie with accumulated mods
-  const releaseFilm = () => {
-    const prod = production;
+  const releaseFilm = (productionIdArg) => {
+    const idToRelease = productionIdArg || viewedProduction?.id;
+    if (!idToRelease) return;
+    const prod = (player.activeProductions || []).find(p => p.id === idToRelease);
     if (!prod) return;
     const { proj, mods, marketing: mkt } = prod;
     const offer = proj.offer;
@@ -12382,8 +13092,167 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     // Festival run adds 4 weeks before normal opening rhythm advances
     const festivalDelay = mkt.festivalAccepted ? 4 : 0;
     advanceWeek(1 + festivalDelay);
-    setProduction(null);
-    setView('hub');
+    // Remove the released production from the slate; clear viewed if it was the one releasing.
+    removeProduction(idToRelease);
+    if (viewedProductionId === idToRelease) {
+      setViewedProductionId(null);
+      setView('hub');
+    }
+  };
+
+  // Background release: same release simulation as foreground but no opening
+  // modal, no setProduction(null), no setView. The film simply appears in
+  // theaters and a log entry fires. Removes itself from backgroundProductions.
+  const releaseBackgroundFilm = (prod) => {
+    const { proj, mods, marketing: mkt } = prod;
+    const offer = proj.offer;
+    const finalMarketing = proj.marketing + (mkt.budgetBoost || 0);
+    const playerBuffs = ownedBuffs(player);
+    const adjustedCostOverrun = Math.round(mods.costOverrun * (1 - playerBuffs.costOverrunReduction));
+    const adjustedFyc = Math.round((mkt.fycSpend || 0) * playerBuffs.fycMultiplier);
+
+    const enrichedProj = {
+      ...proj,
+      marketing: finalMarketing,
+      qualityMod: mods.qualityMod,
+      marketingMod: mods.marketingMod,
+      costOverrun: adjustedCostOverrun,
+      fycSpend: adjustedFyc,
+      releaseYear: player.year,
+    };
+
+    const result = simulateMovie(enrichedProj, player);
+
+    let festivalRun = null;
+    if (mkt.festivalAccepted) {
+      const fest = FESTIVALS.find(f => f.id === mkt.festivalAccepted);
+      if (fest) {
+        result.criticScore = clamp(result.criticScore + fest.criticBoost, 0, 100);
+        result.audienceScore = clamp(result.audienceScore - fest.audienceCost, 0, 100);
+        festivalRun = { festivalId: fest.id, festivalName: fest.shortName, awardScoreBoost: fest.awardScoreBoost };
+      }
+    }
+
+    if (!proj.offer && playerBuffs.boxOfficeShareBonus > 0) {
+      const bonus = Math.round(result.boxOffice * playerBuffs.boxOfficeShareBonus);
+      result.boxOffice += bonus;
+      result.profit += bonus;
+    }
+
+    const run = generateTheatricalRun(result.boxOffice, result.audienceScore, result.criticScore, proj.genre, proj.franchise);
+    const openingWeek = run[0] || { gross: 0, cumulative: 0 };
+
+    let openingCashDelta;
+    if (offer) openingCashDelta = offer.pay;
+    else openingCashDelta = openingWeek.gross - mods.costOverrun - (mkt.budgetBoost || 0);
+
+    setPlayer(p => {
+      const newSkills = { ...p.skills };
+      const newRep = { ...p.reputation };
+      for (const r of ROLES) {
+        newSkills[r] = clamp(newSkills[r] + (result.skillGains[r] || 0), 1, 100);
+        newRep[r] = clamp(newRep[r] + (result.repGains[r] || 0), -50, 100);
+      }
+      const newFame = clamp(p.fame + result.fameGain, 0, 100);
+
+      const inTheatersFilm = {
+        ...enrichedProj,
+        result, year: p.year, week: p.week, ownStudio: !offer,
+        run, currentWeekInRun: 1, currentCumulative: openingWeek.gross,
+        runWeeks: run.length, isOpen: true, festivalRun,
+        backgroundReleased: true, // marker for the filmography view
+      };
+
+      let newStudio = p.studio;
+      if (!offer && p.studio) {
+        newStudio = {
+          ...p.studio,
+          totalRevenue: (p.studio.totalRevenue || 0) + openingWeek.gross,
+          releases: (p.studio.releases || 0) + 1,
+          budgetCap: Math.max(p.studio.budgetCap, openingWeek.gross * 0.5),
+        };
+      }
+
+      // Franchise registration mirrors foreground releaseFilm
+      let newFranchises = { ...(p.franchises || {}) };
+      if (proj.franchise && proj.franchise.id) {
+        const fid = proj.franchise.id;
+        const existing = newFranchises[fid];
+        if (existing) {
+          newFranchises[fid] = {
+            ...existing,
+            entries: [...existing.entries, { title: proj.title, year: p.year, entry: proj.franchise.entry }],
+            lastEntryYear: p.year,
+          };
+        }
+      } else {
+        const playerHasRights = !offer || proj.playerRoles.includes('producer');
+        if (playerHasRights) {
+          const fid = `f_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          newFranchises[fid] = {
+            id: fid, title: proj.title,
+            entries: [{ title: proj.title, year: p.year, entry: 1 }],
+            rootCrew: proj.crew, originalGenre: proj.genre,
+            originalPlayerRoles: proj.playerRoles, ownerIsPlayer: !offer,
+            lastEntryYear: p.year,
+          };
+        }
+      }
+
+      const newGenreCredits = { ...(p.genreCredits || {}) };
+      newGenreCredits[proj.genre] = (newGenreCredits[proj.genre] || 0) + 1;
+
+      return {
+        ...p,
+        cash: p.cash + openingCashDelta,
+        lifetimeEarnings: (p.lifetimeEarnings || 0) + Math.max(0, openingCashDelta),
+        skills: newSkills, reputation: newRep, fame: newFame,
+        peakFame: Math.max(p.peakFame || 0, newFame),
+        inTheaters: [...(p.inTheaters || []), inTheatersFilm],
+        studio: newStudio, franchises: newFranchises, genreCredits: newGenreCredits,
+        activeProductions: (p.activeProductions || []).filter(bp => bp.id !== prod.id),
+      };
+    });
+
+    const headline = `🎬 "${proj.title}" opens to ${fmtMoney(openingWeek.gross)} (released without you on hand). ${result.criticScore >= 70 ? 'Critics raving.' : result.criticScore >= 50 ? 'Mixed reviews.' : 'The reviews are brutal.'}`;
+    addLog('Release', headline);
+  };
+
+  // Tick only BACKGROUND (status='background') productions forward by `weeks`.
+  // Each auto-resolves one event per week via NPC choices. Foreground productions
+  // (status='inProgress') wait for the player to come back and decide — even if
+  // they're not currently being viewed. This preserves player agency: navigating
+  // away from a film you haven't wrapped pauses it, not auto-progresses it.
+  //
+  // The tick is computed inside the setPlayer functional updater so it sees the
+  // most recent activeProductions list (avoids stale-closure bugs when called
+  // immediately after resolvePullBack or other state-mutating handlers).
+  const tickBackgroundProductions = (weeks = 1) => {
+    const releasingFilms = [];
+    setPlayer(p => {
+      const slate = p.activeProductions || [];
+      const bgList = slate.filter(prod => prod.status === 'background' && prod.id !== viewedProductionId);
+      if (bgList.length === 0) return p;
+
+      const updatedById = {};
+      for (const bg of bgList) {
+        const { prod, readyToRelease } = tickProductionEvents(bg, weeks);
+        if (readyToRelease) releasingFilms.push(prod);
+        else updatedById[prod.id] = prod;
+      }
+
+      // Walk the slate, swap each background entry for its updated version, drop
+      // releasing ones — keep foreground entries fully intact in their original spot.
+      const newSlate = slate
+        .map(prod => updatedById[prod.id] || prod)
+        .filter(prod => !releasingFilms.some(r => r.id === prod.id));
+
+      return { ...p, activeProductions: newSlate };
+    });
+    // Then release each one — releaseBackgroundFilm handles cash/inTheaters/franchise updates
+    for (const r of releasingFilms) {
+      releaseBackgroundFilm(r);
+    }
   };
 
   // Process all in-theaters films during a week tick.
@@ -12568,8 +13437,8 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
 
   const withdrawFromReserves = (amount) => {
     if (!player.studio || amount <= 0 || amount > (player.studio.reserves || 0)) return;
-    if (production) {
-      addLog('Studio', `Can't withdraw from reserves during active production.`);
+    if ((player.activeProductions || []).length > 0) {
+      addLog('Studio', `Can't withdraw from reserves while pictures are in flight.`);
       return;
     }
     setPlayer(p => ({
@@ -13122,38 +13991,47 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
     );
   }
 
-  if (view === 'production' && production) {
+  if (view === 'production' && viewedProduction) {
     return (
       <>
         <StatsBar player={player} />
-        <ProductionHUD production={production} />
-        {production.phase === 'preprod' && (
+        <ProductionHUD production={viewedProduction} />
+        {/* Slate switch: if there are other productions in flight, let the player jump back to the hub to switch */}
+        {(player.activeProductions || []).length > 1 && (
+          <div className="ht-row" style={{ justifyContent: 'flex-end', marginBottom: 8 }}>
+            <button className="ht-btn ht-btn-sm" onClick={() => { setViewedProductionId(null); setView('hub'); }}>
+              ← Back to Slate ({player.activeProductions.length} in flight)
+            </button>
+          </div>
+        )}
+        {viewedProduction.phase === 'preprod' && (
           <PreProductionScreen
-            production={production}
+            production={viewedProduction}
             player={player}
             onChoice={applyProductionChoice}
             onAdvance={advancePhase}
           />
         )}
-        {production.phase === 'filming' && (
+        {viewedProduction.phase === 'filming' && (
           <FilmingScreen
-            production={production}
+            production={viewedProduction}
             player={player}
             onChoice={applyProductionChoice}
             onAdvance={advancePhase}
+            onWrapAndBackground={wrapAndBackground}
           />
         )}
-        {production.phase === 'postprod' && (
+        {viewedProduction.phase === 'postprod' && (
           <PostProductionScreen
-            production={production}
+            production={viewedProduction}
             player={player}
             onChoice={applyProductionChoice}
             onAdvance={advancePhase}
           />
         )}
-        {production.phase === 'marketing' && (
+        {viewedProduction.phase === 'marketing' && (
           <MarketingScreen
-            production={production}
+            production={viewedProduction}
             player={player}
             onChoice={applyProductionChoice}
             onAdvance={advancePhase}
@@ -13278,7 +14156,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                 player={player}
                 onDeposit={depositToReserves}
                 onWithdraw={withdrawFromReserves}
-                productionActive={!!production}
+                productionActive={(player.activeProductions || []).length > 0}
               />
             </CollapsiblePanel>
           )}
@@ -13433,6 +14311,119 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
             </CollapsiblePanel>
           )}
 
+          {(player.activeProductions || []).length > 0 && (
+            <CollapsiblePanel
+              id="slate"
+              title="Your Slate"
+              subtitle="Every picture you have in flight"
+              badge={`${(player.activeProductions || []).length} ${(player.activeProductions || []).length === 1 ? 'film' : 'films'}`}
+              defaultOpen={true}
+            >
+              {player.activeProductions.map((prod) => {
+                const phaseLabels = {
+                  preprod: 'Pre-production',
+                  filming: prod.playerWrapped ? 'Filming (you wrapped)' : 'Filming',
+                  postprod: 'Post-production',
+                  marketing: 'Marketing',
+                  release: 'Releasing',
+                };
+                const phaseState = prod[prod.phase] || {};
+                const eventsLeft = Math.max(0, (phaseState.events?.length || 0) - (phaseState.currentEventIdx || 0));
+                const phaseOrder = ['preprod', 'filming', 'postprod', 'marketing', 'release'];
+                const remainingPhases = phaseOrder.slice(phaseOrder.indexOf(prod.phase) + 1, phaseOrder.length - 1);
+                const estDownstream = remainingPhases.reduce((s, ph) => {
+                  const [min, max] = PHASE_EVENT_COUNTS[ph] || [3, 5];
+                  return s + Math.round((min + max) / 2);
+                }, 0);
+                const estWeeksToRelease = eventsLeft + estDownstream;
+                const isForeground = prod.status !== 'background';
+                const needsAttention = isForeground && eventsLeft > 0;
+                const pullBack = prod.pullBackPending; // 'adr' | 'press' | null
+                const accentColor = pullBack ? 'var(--gold-bright)' :
+                                   needsAttention ? 'var(--gold-bright)' : 'var(--gold-dim)';
+                return (
+                  <div
+                    key={prod.id}
+                    style={{
+                      padding: '10px 14px',
+                      marginBottom: 8,
+                      background: 'rgba(0,0,0,0.25)',
+                      border: '1px solid var(--border)',
+                      borderLeft: `3px solid ${accentColor}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+                      <div>
+                        <strong style={{ color: 'var(--gold-bright)', fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '1.05rem' }}>
+                          "{prod.proj.title}"
+                        </strong>
+                        <span className="ht-text-dim"> · {prod.proj.genre} · {phaseLabels[prod.phase] || prod.phase}</span>
+                        {needsAttention && !pullBack && (
+                          <span className="ht-tag" style={{ marginLeft: 6, borderColor: 'var(--gold-bright)', color: 'var(--gold-bright)' }}>
+                            Needs you
+                          </span>
+                        )}
+                        {pullBack && (
+                          <span className="ht-tag" style={{ marginLeft: 6, borderColor: 'var(--gold-bright)', color: 'var(--gold-bright)' }}>
+                            ⚠ Pull-back
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                        <span className="ht-tag" style={{ borderColor: accentColor }}>
+                          ~{estWeeksToRelease}w to release
+                        </span>
+                        {isForeground && !pullBack && (
+                          <button
+                            className="ht-btn ht-btn-sm ht-btn-primary"
+                            onClick={() => { setViewedProductionId(prod.id); setView('production'); }}
+                          >
+                            Open →
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="ht-text-dim" style={{ fontSize: '0.78rem', marginTop: 4, fontStyle: 'italic' }}>
+                      Quality mod so far: {prod.mods.qualityMod >= 0 ? '+' : ''}{prod.mods.qualityMod}
+                      {prod.backgroundedAt && ` · Wrapped ${prod.backgroundedAt.year} · W${prod.backgroundedAt.week}`}
+                      {(prod.proj.playerRoles || []).length > 0 && ` · You: ${prod.proj.playerRoles.map(r => ROLE_LABELS[r]).join('/')}`}
+                    </div>
+                    {pullBack === 'adr' && (
+                      <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(212,166,74,0.08)', border: '1px dashed var(--gold-dim)' }}>
+                        <div style={{ fontSize: '0.88rem', marginBottom: 6 }}>
+                          🎙 <strong>ADR session needed.</strong> The editor flagged dialogue lines for re-recording. Fly in for a half-day, or use a voice double.
+                        </div>
+                        <div className="ht-row">
+                          <button className="ht-btn ht-btn-sm ht-btn-primary" onClick={() => resolvePullBack(prod.id, 'do')}>
+                            Schedule ADR (1 wk, +2 quality)
+                          </button>
+                          <button className="ht-btn ht-btn-sm" onClick={() => resolvePullBack(prod.id, 'skip')}>
+                            Skip — voice double (-1 quality)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {pullBack === 'press' && (
+                      <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(212,166,74,0.08)', border: '1px dashed var(--gold-dim)' }}>
+                        <div style={{ fontSize: '0.88rem', marginBottom: 6 }}>
+                          🎤 <strong>Press tour starting.</strong> Junkets, late-night, premieres. The face on the poster matters here.
+                        </div>
+                        <div className="ht-row">
+                          <button className="ht-btn ht-btn-sm ht-btn-primary" onClick={() => resolvePullBack(prod.id, 'do')}>
+                            Do the press tour (4 wks, +marketing, +5 fame)
+                          </button>
+                          <button className="ht-btn ht-btn-sm" onClick={() => resolvePullBack(prod.id, 'skip')}>
+                            Skip — let the studio handle it
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </CollapsiblePanel>
+          )}
+
           {(player.inTheaters || []).length > 0 && (
             <CollapsiblePanel
               id="intheaters"
@@ -13474,7 +14465,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                     </div>
                     {/* Mini sparkline */}
                     <div style={{ marginTop: 8 }}>
-                      <BoxOfficeChart run={partialRun} height={70} showCumulative={false} />
+                      <BoxOfficeChart run={partialRun} height={70} showCumulative={false} totalWeeks={film.runWeeks} />
                     </div>
                   </div>
                 );
@@ -13647,9 +14638,21 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                     <CrewAttached project={o} player={player} />
                   </div>
                   <div className="ht-row">
-                    <button className="ht-btn ht-btn-primary ht-btn-sm" onClick={() => acceptOffer(o)}>
-                      Accept Role
-                    </button>
+                    {(() => {
+                      const commitments = getRoleCommitments(player);
+                      const cap = ROLE_CAPS[o.playerRole];
+                      const wouldExceedCap = (commitments[o.playerRole] || 0) >= cap;
+                      return (
+                        <button
+                          className="ht-btn ht-btn-primary ht-btn-sm"
+                          onClick={() => acceptOffer(o)}
+                          disabled={wouldExceedCap}
+                          title={wouldExceedCap ? `You're at the limit for ${ROLE_LABELS[o.playerRole].toLowerCase()} (${commitments[o.playerRole]}/${cap} in flight). Wrap or release one first.` : ''}
+                        >
+                          {wouldExceedCap ? `🔒 At Limit (${commitments[o.playerRole]}/${cap})` : 'Accept Role'}
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
                 );
@@ -13695,9 +14698,21 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
                           </Tooltip>
                         </span>
                       </div>
-                      <button className="ht-btn ht-btn-sm" onClick={() => attemptAudition(a)}>
-                        Audition (1 week)
-                      </button>
+                      {(() => {
+                        const commitments = getRoleCommitments(player);
+                        const cap = ROLE_CAPS[a.playerRole];
+                        const wouldExceedCap = (commitments[a.playerRole] || 0) >= cap;
+                        return (
+                          <button
+                            className="ht-btn ht-btn-sm"
+                            onClick={() => attemptAudition(a)}
+                            disabled={wouldExceedCap}
+                            title={wouldExceedCap ? `You're at the limit for ${ROLE_LABELS[a.playerRole].toLowerCase()} (${commitments[a.playerRole]}/${cap} in flight). Wrap or release one first.` : ''}
+                          >
+                            {wouldExceedCap ? `🔒 At Limit (${commitments[a.playerRole]}/${cap})` : 'Audition (1 week)'}
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -13827,7 +14842,7 @@ function MainGame({ player, setPlayer, onLoad, onRetireToNew }) {
       {view === 'personal' && (
         <PersonalLife
           player={player}
-          production={production}
+          production={viewedProduction}
           onAction={handlePersonalAction}
           onPlant={plantStory}
           onClose={() => setView('hub')}
